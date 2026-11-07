@@ -1,0 +1,24 @@
+# 示例词库（UTF-8），可修改后通过应用内「导入词库」导入
+# 三种写法：
+#   单词一行            → 输入前缀联想该单词
+#   键 值（空格分隔）    → 输入 key 前缀候选 value
+#   键 TAB 值 TAB 词频   → 词频越大越靠前
+
+# 英文示例
+hello
+world
+wear
+keyboard
+android
+
+# 拼音示例（键 值 词频）
+nihao	你好	500
+ni	你	300
+hao	好	200
+shijie	世界	120
+xiexie	谢谢	200
+zaijian	再见	150
+wo	我	800
+women	我们	260
+ai	爱	220
+aihaozhe	爱好者	60

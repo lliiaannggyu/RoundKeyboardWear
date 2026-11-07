@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">圆屏26键输入法</string>
+    <string name="ime_name">圆屏26键</string>
+    <string name="dict_empty">当前词库：未导入（可导入单词表或 拼音→词 文本）</string>
+</resources>
