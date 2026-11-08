@@ -8,7 +8,6 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.util.AttributeSet
-import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
 import com.example.roundkb.R as AppR
@@ -387,7 +386,7 @@ class RoundKeyboardView @JvmOverloads constructor(
 
         val cands = d.suggest(MAX_CANDIDATES)
         if (cands.isEmpty()) {
-            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            SettingsStore.keyVibrate(context, strong = true)   // 无命中：强震动提示
             return
         }
         buf.setLength(0)
@@ -395,7 +394,7 @@ class RoundKeyboardView @JvmOverloads constructor(
         candidates.addAll(cands)
         layoutKeys(width.toFloat(), height.toFloat())
         invalidate()
-        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+        SettingsStore.keyVibrate(context)
     }
 
     // ============================== 绘制 ==============================
@@ -439,7 +438,8 @@ class RoundKeyboardView @JvmOverloads constructor(
                 val dr = context.getDrawable(k.iconRes)
                 if (dr != null) {
                     dr.setTint(txt)
-                    val s = min(k.hw, k.hh) * 1.10f   // 图标边长
+                    // 图标边长 = 键短边 × 基准 0.95 × 全局缩放（设置页可调 小/标准/大）
+                    val s = min(k.hw, k.hh) * 0.95f * SettingsStore.iconScale(context)
                     dr.setBounds(
                         (k.x - s).toInt(), (k.y - s).toInt(),
                         (k.x + s).toInt(), (k.y + s).toInt()
@@ -496,7 +496,7 @@ class RoundKeyboardView @JvmOverloads constructor(
             if (best == null) removeCallbacks(deleteRepeat)
             pressed = best
             if (pressed != null) {
-                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                SettingsStore.keyVibrate(context)
             }
             invalidate()
         }
@@ -532,7 +532,7 @@ class RoundKeyboardView @JvmOverloads constructor(
                         decoder?.clear()
                         decoder?.addPoint(start[0], start[1])
                         decoder?.addPoint(x, y)
-                        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                        SettingsStore.keyVibrate(context)
                     } else {
                         updatePressed(x, y)
                     }
