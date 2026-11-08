@@ -56,7 +56,7 @@ class RoundKeyboardView @JvmOverloads constructor(
         // ---- 几何参数（按表盘大小微调） ----
         private const val MARGIN_FRACTION = 0.05f    // 外边距占直径比例
         private const val MIN_MARGIN_PX = 10f        // 边距下限
-        private const val SAFE_FACTOR = 0.965f       // 安全圆系数（越界自动拉回）
+        private const val SAFE_FACTOR = 0.98f        // 安全圆系数（越界自动拉回）
         private const val HIT_SLOP_MUL = 1.15f       // 触点容错
         private const val HIT_SLOP_ADD = 8f
         private const val GESTURE_START = 0.30f      // 起点位移 > 0.30R 进入滑行
@@ -81,7 +81,7 @@ class RoundKeyboardView @JvmOverloads constructor(
         private val SYM2 = listOf(".", ",", "?", "!", "'", "\"", ":")
 
         /** 行宽占该高度处圆弧弦长的比例（直排下控制左右边距） */
-        private const val ROW_SPAN = 0.88f
+        private const val ROW_SPAN = 0.93f
     }
 
     private class Key {
@@ -175,29 +175,29 @@ class RoundKeyboardView @JvmOverloads constructor(
 
         // 等宽键步距：按最宽行（10 键）× 顶部行（最靠边、弦最短）确定，
         // 三行共用同一步距 → 行宽随键数自然递减（10 → 9 → 9），Gboard 式。
-        val dTop = 0.44f * R
+        val dTop = 0.42f * R
         val chordTop = sqrt(max(0f, R * R - dTop * dTop))
         val unit = 2f * chordTop * ROW_SPAN / 10f
 
         if (!symbols) {
             if (candMode) {
-                addCandidateRow(-0.66f, cx, cy, R)
+                addCandidateRow(-0.64f, cx, cy, R)
+                addRow(ROW0, -0.40f, cx, cy, R, unit)
+                addRow(ROW1, -0.08f, cx, cy, R, unit)
+                addBottomRow(0.24f, cx, cy, R, unit)
+            } else {
                 addRow(ROW0, -0.42f, cx, cy, R, unit)
                 addRow(ROW1, -0.10f, cx, cy, R, unit)
                 addBottomRow(0.22f, cx, cy, R, unit)
-            } else {
-                addRow(ROW0, -0.44f, cx, cy, R, unit)
-                addRow(ROW1, -0.12f, cx, cy, R, unit)
-                addBottomRow(0.20f, cx, cy, R, unit)
             }
             addControls(cx, cy, R)
         } else {
-            addRow(SYM0, -0.44f, cx, cy, R, unit)
-            addRow(SYM1, -0.12f, cx, cy, R, unit)
+            addRow(SYM0, -0.42f, cx, cy, R, unit)
+            addRow(SYM1, -0.10f, cx, cy, R, unit)
             val bottom = mutableListOf("ABC")
             bottom.addAll(SYM2)
             bottom.add("DEL")
-            addRow(bottom, 0.20f, cx, cy, R, unit)
+            addRow(bottom, 0.22f, cx, cy, R, unit)
             addControls(cx, cy, R)
         }
 
@@ -254,7 +254,7 @@ class RoundKeyboardView @JvmOverloads constructor(
         if (n == 0 || unit <= 0f) return
 
         val hw = unit * 0.48f          // 键帽半宽（步距的 96%，留出键间隙）
-        val hh = unit * 0.60f          // 键帽半高（略高于宽，Gboard 键更高）
+        val hh = unit * 0.52f          // 键帽半高（近方形，观感更宽）
 
         for ((i, s) in items.withIndex()) {
             val x = cx + (i - (n - 1) / 2f) * unit
@@ -461,7 +461,7 @@ class RoundKeyboardView @JvmOverloads constructor(
                 label = label.uppercase()
             }
 
-            var size = k.hh * (if (k.control) 1.5f else 1.7f)
+            var size = k.hh * (if (k.control) 1.5f else 1.95f)
             if (label.length > 2) {
                 val fit = k.hw * 1.8f / (0.60f * label.length)
                 size = min(size, fit)

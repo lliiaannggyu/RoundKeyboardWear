@@ -100,6 +100,8 @@ app/src/main/java/com/example/roundkb/
 
 ## 更新日志
 
+- **v1.7**：**加宽键盘字母键**——键距（ROW_SPAN 0.88→0.93）与顶行位置（0.44R→0.42R）外扩，键帽高比 0.60→0.52 改为近方形观感，字母字号相应放大；安全圆余量 3.5%→2%
+
 - **v1.6**：抛弃自绘/Unicode 字符图标，全面改用 **Material Icons 图标库**矢量资源：功能键（Shift=capslock、退格=backspace、回车=keyboard_return、空格=space_bar）、应用启动图标（Adaptive Icon，键盘图标 + Gboard 蓝）、设置页按钮图标（settings / upload / delete）
 
 - **v1.5**：布局改为 **Gboard 等宽键**（行宽随键数 10→9→9 递减，修复第一行反而最短的问题）；设置页引入 **Material 3 (Compose)** 组件库重构；APK 增大至 ~7.6MB（Compose 运行时）
