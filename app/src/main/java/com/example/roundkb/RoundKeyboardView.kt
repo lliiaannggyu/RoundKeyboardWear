@@ -53,6 +53,15 @@ class RoundKeyboardView @JvmOverloads constructor(
         const val ACTION_MODE = 4
         const val ACTION_IME_PICKER = 5   // ‹ 切换输入法
         const val ACTION_HIDE = 6         // ✕ 收起键盘
+        const val ACTION_EMOJI = 7        // 😀 表情面板
+        const val ACTION_SYMPAGE = 8      // =\< 符号翻页
+        const val ACTION_LETTER = 9       // ABC 回字母层
+        const val ACTION_EMOJI_TAB = 10   // 表情分类页签（candIndex 存分类号）
+
+        // 键盘模式
+        const val MODE_LETTER = 0
+        const val MODE_SYMBOL = 1
+        const val MODE_EMOJI = 2
 
         // ---- 几何参数（按表盘大小微调） ----
         private const val MARGIN_FRACTION = 0.05f    // 外边距占直径比例
@@ -77,9 +86,20 @@ class RoundKeyboardView @JvmOverloads constructor(
         private val ROW0 = "QWERTYUIOP".map { it.toString() }
         private val ROW1 = "ASDFGHJKL".map { it.toString() }
         private val ROW2 = "ZXCVBNM".map { it.toString() }
-        private val SYM0 = "1234567890".map { it.toString() }
-        private val SYM1 = listOf("@", "#", "￥", "%", "&", "*", "-", "+", "/")
-        private val SYM2 = listOf(".", ",", "?", "!", "'", "\"", ":")
+
+        /** 符号两页（?123 / =\<），每页三行 —— 完整覆盖标点/括号/货币/数学符号 */
+        private val SYM_PAGES = arrayOf(
+            arrayOf(
+                "1234567890".map { it.toString() },
+                listOf("@", "#", "￥", "%", "&", "*", "-", "+", "/", "("),
+                listOf(".", ",", "?", "!", "'", "\"", ":", ";", ")")
+            ),
+            arrayOf(
+                listOf("~", "`", "^", "°", "=", "<", ">", "±", "×", "÷"),
+                listOf("[", "]", "{", "}", "|", "\\", "_", "—", "…", "·"),
+                listOf("€", "£", "$", "₩", "¡", "¿", "«", "»", "§")
+            )
+        )
 
         /** 行宽占该高度处圆弧弦长的比例（直排下控制左右边距） */
         private const val ROW_SPAN = 0.90f
@@ -95,6 +115,8 @@ class RoundKeyboardView @JvmOverloads constructor(
         var control = false
         /** 无键帽（Gboard Wear 式透明字母键 / ⇧ / ⌫）：平时只画内容不画底 */
         var noFill = false
+        /** 表情键：以较大字号绘制，点按直接上屏 */
+        var emoji = false
         /** Material Icons 矢量资源 id（非 0 时绘制图标而非文字） */
         var iconRes: Int = 0
     }
@@ -110,7 +132,12 @@ class RoundKeyboardView @JvmOverloads constructor(
     var keyListener: KeyListener? = null
 
     private var pressed: Key? = null
-    private var symbols = false
+    private var mode = MODE_LETTER          // 字母 / 符号 / 表情
+    private var symPage = 0                 // 符号页（0=?123  1==\<）
+    private var emojiCat = 0                // 表情分类（0=最近）
+    private var emojiPage = 0               // 表情分类内页码
+    private val recentEmoji = mutableListOf<String>()   // 最近使用的表情（内存）
+    private var emojiSwiped = false         // 表情面板横滑翻页
     private var shift = false
     private var capsLock = false
     private var lastShiftTap = 0L
@@ -177,31 +204,38 @@ class RoundKeyboardView @JvmOverloads constructor(
         val cy = h / 2f
         val R = safeRadius(size)
 
-        val candMode = buf.isNotEmpty() && candidates.isNotEmpty()
+        val candMode = buf.isNotEmpty() && candidates.isNotEmpty() && mode == MODE_LETTER
         val s = SettingsStore.keyScale(context)
 
         // Gboard Wear 真机版式（对照实机截图）：
-        //  - 顶部工具条：‹ 切换输入法 / ?123 符号 / ↵ 回车 / ✕ 收起（蓝圆），
-        //    组合输入时该位置替换为候选词条；
-        //  - 三行小写字母键：**无键帽**，纯白文字直接印在黑底上；
-        //  - 底排：⇧（描边箭头）/ 宽空格胶囊 / ⌫（描边图标）。
+        //  - 顶部工具条：‹ 切换输入法 / 😀 表情 / ?123 符号 / ↵ 回车 / ✕ 收起（蓝圆），
+        //    字母层组合输入时该位置替换为候选词条；
+        //  - 字母层：三行小写字母键，无键帽；
+        //  - 符号层：两页完整符号（?123 / =\<），保留键帽便于辨认；
+        //  - 表情层：10 分类页签 + 5×4 网格 + 横滑翻页 + 页码圆点；
+        //  - 底排：⇧（或 =\< / ABC）/ 宽空格胶囊 / ⌫。
         val dTop = 0.30f * R
         val chordTop = sqrt(max(0f, R * R - dTop * dTop))
         val unit = 2f * chordTop * ROW_SPAN / 10f * s
 
         if (candMode) {
             addCandidateRow(-0.60f, cx, cy, R)
-        } else {
-            addToolbar(-0.60f, cx, cy, R, s)
+        } else if (mode != MODE_EMOJI) {
+            addToolbar(-0.60f, cx, cy, R, s)   // 表情层由页签行取代工具条
         }
-        if (!symbols) {
-            addRow(ROW0, -0.30f, cx, cy, R, unit)
-            addRow(ROW1, -0.02f, cx, cy, R, unit)
-            addRow(ROW2, 0.26f, cx, cy, R, unit)
-        } else {
-            addRow(SYM0, -0.30f, cx, cy, R, unit)
-            addRow(SYM1, -0.02f, cx, cy, R, unit)
-            addRow(SYM2, 0.26f, cx, cy, R, unit)
+        when (mode) {
+            MODE_LETTER -> {
+                addRow(ROW0, -0.30f, cx, cy, R, unit, bare = true)
+                addRow(ROW1, -0.02f, cx, cy, R, unit, bare = true)
+                addRow(ROW2, 0.26f, cx, cy, R, unit, bare = true)
+            }
+            MODE_SYMBOL -> {
+                val page = SYM_PAGES[symPage]
+                addRow(page[0], -0.30f, cx, cy, R, unit, bare = false)
+                addRow(page[1], -0.02f, cx, cy, R, unit, bare = false)
+                addRow(page[2], 0.26f, cx, cy, R, unit, bare = false)
+            }
+            MODE_EMOJI -> addEmojiGrid(cx, cy, R, s)
         }
         addBottomRow(0.54f, cx, cy, R, s)
 
@@ -228,41 +262,91 @@ class RoundKeyboardView @JvmOverloads constructor(
         decoder = d
     }
 
-    /** 顶部工具条：‹ 切换输入法 / ?123 符号 / ↵ 回车 / ✕ 收起（Gboard Wear 式） */
+    /** 顶部工具条：‹ 切换输入法 / 😀 表情 / ?123 符号 / ↵ 回车 / ✕ 收起（Gboard Wear 式） */
     private fun addToolbar(y0f: Float, cx: Float, cy: Float, R: Float, s: Float) {
         val y = cy + y0f * R
-        val hw = 0.105f * R * s
-        val hh = 0.088f * R * s
-        addKey("‹", null, ACTION_IME_PICKER, cx - 0.42f * R, y, hw, hh, true).apply {
+        val hw = 0.098f * R * s
+        val hh = 0.085f * R * s
+        addKey("‹", null, ACTION_IME_PICKER, cx - 0.46f * R, y, hw, hh, true).apply {
             iconRes = AppR.drawable.ic_chevron_left
         }
-        addKey(if (symbols) "ABC" else "?123", null, ACTION_MODE, cx - 0.15f * R, y, hw, hh, true)
-        addKey("↵", null, ACTION_ENTER, cx + 0.15f * R, y, hw, hh, true).apply {
+        addKey("😀", null, ACTION_EMOJI, cx - 0.23f * R, y, hw, hh, true).apply {
+            emoji = true
+        }
+        addKey(if (mode == MODE_SYMBOL) "ABC" else "?123", null, ACTION_MODE, cx, y, hw, hh, true)
+        addKey("↵", null, ACTION_ENTER, cx + 0.23f * R, y, hw, hh, true).apply {
             iconRes = AppR.drawable.ic_return
         }
-        addKey("✕", null, ACTION_HIDE, cx + 0.42f * R, y, hw, hh, true).apply {
+        addKey("✕", null, ACTION_HIDE, cx + 0.46f * R, y, hw, hh, true).apply {
             iconRes = AppR.drawable.ic_close
         }
     }
 
-    /** 底排：⇧（或 ABC） / 宽空格胶囊 / ⌫ —— Gboard Wear 式三键底排 */
+    /** 表情层：分类页签 + 5×4 网格（横滑翻页，页码圆点在 onDraw 画） */
+    private fun addEmojiGrid(cx: Float, cy: Float, R: Float, s: Float) {
+        // 分类页签
+        val tabY = cy - 0.58f * R
+        val tabN = EmojiData.names.size
+        val tabSpacing = 0.088f * R
+        for (i in 0 until tabN) {
+            val x = cx + (i - (tabN - 1) / 2f) * tabSpacing
+            addKey(EmojiData.tabIcons[i], null, ACTION_EMOJI_TAB, x, tabY,
+                0.042f * R, 0.038f * R, true).apply {
+                emoji = true
+                candIndex = i
+                if (i == emojiCat) noFill = false else noFill = true
+            }
+        }
+
+        // 表情网格
+        val list = currentEmojiList()
+        if (list.isEmpty()) return
+        val perPage = 20
+        val maxPage = (list.size + perPage - 1) / perPage
+        if (emojiPage >= maxPage) emojiPage = maxPage - 1
+        val items = list.drop(emojiPage * perPage).take(perPage)
+        val dTop = 0.36f * R
+        val chord = sqrt(max(0f, R * R - dTop * dTop))
+        val unitE = 2f * chord * 0.92f / 5f * s
+        val ys = listOf(-0.36f, -0.15f, 0.06f, 0.27f)
+        val hw = unitE * 0.48f
+        val hh = 0.115f * R * s
+        items.forEachIndexed { idx, e ->
+            val row = idx / 5
+            val col = idx % 5
+            val x = cx + (col - 2f) * unitE
+            val y = cy + ys[row] * R
+            addKey(e, e, -1, x, y, hw, hh, true).apply {
+                emoji = true
+                noFill = true
+            }
+        }
+    }
+
+    private fun currentEmojiList(): List<String> =
+        if (emojiCat == 0) recentEmoji else EmojiData.categories[emojiCat - 1]
+
+    /** 底排：⇧（或 =\< / ABC）/ 宽空格胶囊 / ⌫ —— Gboard Wear 式三键底排 */
     private fun addBottomRow(y0f: Float, cx: Float, cy: Float, R: Float, s: Float) {
         val y = cy + y0f * R
         val hw = 0.115f * R * s
         val hh = 0.098f * R * s
-        if (symbols) {
-            addKey("ABC", null, ACTION_MODE, cx - 0.40f * R, y, hw, hh, true)
-        } else {
-            addKey("⇧", null, ACTION_SHIFT, cx - 0.40f * R, y, hw, hh, true).apply {
+        when (mode) {
+            MODE_LETTER -> addKey("⇧", null, ACTION_SHIFT, cx - 0.40f * R, y, hw, hh, true).apply {
                 noFill = true
                 iconRes = AppR.drawable.ic_capslock
             }
+            MODE_SYMBOL -> addKey(if (symPage == 0) "=\\<" else "?123", null, ACTION_SYMPAGE,
+                cx - 0.40f * R, y, hw, hh, true)
+            else -> addKey("ABC", null, ACTION_LETTER, cx - 0.40f * R, y, hw, hh, true)
         }
-        addKey("␣", " ", -1, cx, y, 0.26f * R * s, 0.105f * R * s, true).apply {
-            iconRes = AppR.drawable.ic_space
+        if (mode != MODE_EMOJI) {
+            addKey("␣", " ", -1, cx, y, 0.26f * R * s, 0.105f * R * s, true).apply {
+                iconRes = AppR.drawable.ic_space
+            }
         }
         addKey("⌫", null, ACTION_DELETE, cx + 0.40f * R, y, hw, hh, true).apply {
-            noFill = true
+            noFill = mode != MODE_SYMBOL
             iconRes = AppR.drawable.ic_backspace
         }
     }
@@ -272,7 +356,8 @@ class RoundKeyboardView @JvmOverloads constructor(
      * @param y0f  行中心纵向偏移（相对 R，负 = 上方）
      * @param unit 等宽键步距（键心间距），由 layoutKeys 按最宽行统一确定
      */
-    private fun addRow(items: List<String>, y0f: Float, cx: Float, cy: Float, R: Float, unit: Float) {
+    private fun addRow(items: List<String>, y0f: Float, cx: Float, cy: Float, R: Float, unit: Float,
+                       bare: Boolean) {
         val y0 = cy + y0f * R
         val n = items.size
         if (n == 0 || unit <= 0f) return
@@ -286,8 +371,10 @@ class RoundKeyboardView @JvmOverloads constructor(
             when (s) {
                 "ABC", "123" -> addKey(s, null, ACTION_MODE, x, y0, hw, hh, true)
                 else -> {
-                    // 字母/符号键：小写显示（Gboard Wear 式），shift 时经绘制层转大写
-                    addKey(s.lowercase(), s.lowercase(), -1, x, y0, hw, hh, false)
+                    // 字母/符号键：字母层小写无键帽（Gboard Wear 式），shift 时经绘制层转大写
+                    addKey(s.lowercase(), s.lowercase(), -1, x, y0, hw, hh, false).apply {
+                        noFill = bare
+                    }
                 }
             }
         }
@@ -436,13 +523,18 @@ class RoundKeyboardView @JvmOverloads constructor(
             var txt = COLOR_TEXT
             when {
                 k === pressed -> fill = COLOR_PRESSED
+                k.action == ACTION_EMOJI_TAB ->
+                    if (k.candIndex == emojiCat) { fill = COLOR_ACCENT; txt = COLOR_TEXT_DARK }
+                    else { fill = COLOR_KEY_CTL }
                 k.candIndex == 0 -> { fill = COLOR_ACCENT; txt = COLOR_TEXT_DARK }  // 首选候选
                 k.candIndex > 0 -> fill = COLOR_KEY_CTL
                 k.action == ACTION_HIDE -> { fill = COLOR_ACCENT; txt = Color.WHITE }  // ✕ 蓝圆
+                k.action == ACTION_EMOJI && mode == MODE_EMOJI ->
+                    { fill = COLOR_ACCENT; txt = COLOR_TEXT_DARK }
                 k.action == ACTION_ENTER -> { fill = COLOR_KEY_CTL }
                 k.action == ACTION_SHIFT && (shift || capsLock) ->
                     { fill = COLOR_ACCENT; txt = COLOR_TEXT_DARK }
-                k.action == ACTION_MODE && symbols ->
+                k.action == ACTION_MODE && mode == MODE_SYMBOL ->
                     { fill = COLOR_ACCENT; txt = COLOR_TEXT_DARK }
                 k.text == " " -> fill = COLOR_KEY_CTL
                 k.control -> fill = COLOR_KEY_CTL
@@ -482,13 +574,19 @@ class RoundKeyboardView @JvmOverloads constructor(
             var label = k.label
             if (k.text == " " && buf.isNotEmpty()) label = buf.toString()   // 组合串显示在空格键
             val t = k.text
-            if (t != null && !k.control && k.candIndex < 0 && shift && !symbols && !capsLock &&
-                t.length == 1 && t[0].isLowerCase()
+            if (t != null && !k.control && k.candIndex < 0 && shift && mode == MODE_LETTER &&
+                !capsLock && t.length == 1 && t[0].isLowerCase()
             ) {
                 label = label.uppercase()
             }
 
-            var size = k.hh * (if (k.control) 1.2f else 0.95f)
+            var size = when {
+                k.emoji && k.action == ACTION_EMOJI -> k.hh * 1.5f        // 工具条 😀
+                k.emoji && k.action == ACTION_EMOJI_TAB -> k.hh * 1.3f    // 分类页签
+                k.emoji -> k.hh * 1.45f                                   // 表情网格
+                k.control -> k.hh * 1.2f
+                else -> k.hh * 0.95f
+            }
             if (label.length > 2) {
                 val fit = k.hw * 1.8f / (0.60f * label.length)
                 size = min(size, fit)
@@ -498,6 +596,36 @@ class RoundKeyboardView @JvmOverloads constructor(
             val fm = textPaint.fontMetrics
             val ty = k.y - (fm.ascent + fm.descent) / 2f
             canvas.drawText(label, k.x, ty, textPaint)
+        }
+
+        // 表情层附加绘制：最近分类为空时的提示 + 页码圆点
+        if (mode == MODE_EMOJI) {
+            val size = min(width, height).toFloat()
+            val cx = width / 2f
+            val cy = height / 2f
+            val R = safeRadius(size)
+            if (currentEmojiList().isEmpty()) {
+                textPaint.textSize = 0.075f * R
+                textPaint.color = 0xFF9AA0A6.toInt()
+                val fm = textPaint.fontMetrics
+                val ty = cy - (fm.ascent + fm.descent) / 2f
+                canvas.drawText("暂无最近表情", cx, ty, textPaint)
+            } else {
+                val list = currentEmojiList()
+                val maxPage = (list.size + 19) / 20
+                keyPaint.color = COLOR_ACCENT
+                for (i in 0 until maxPage) {
+                    if (i != emojiPage) {
+                        keyPaint.color = COLOR_PRESSED
+                        canvas.drawCircle(cx + (i - (maxPage - 1) / 2f) * 0.055f * R,
+                            cy + 0.47f * R, 0.009f * R, keyPaint)
+                        keyPaint.color = COLOR_ACCENT
+                    } else {
+                        canvas.drawCircle(cx + (i - (maxPage - 1) / 2f) * 0.055f * R,
+                            cy + 0.47f * R, 0.009f * R, keyPaint)
+                    }
+                }
+            }
         }
     }
 
@@ -536,6 +664,7 @@ class RoundKeyboardView @JvmOverloads constructor(
                 trace.clear()
                 trace.add(floatArrayOf(x, y))
                 tracing = false
+                emojiSwiped = false
                 decoder?.clear()
                 updatePressed(x, y)
                 if (pressed?.action == ACTION_DELETE) postDelayed(deleteRepeat, 400)
@@ -551,7 +680,21 @@ class RoundKeyboardView @JvmOverloads constructor(
                 } else {
                     val size = min(width, height).toFloat()
                     val start = trace.first()
-                    if (dist(start, floatArrayOf(x, y)) > GESTURE_START * safeRadius(size)) {
+                    if (mode == MODE_EMOJI) {
+                        // 表情面板：横滑翻页（不参与滑行打字）
+                        val dx = x - start[0]
+                        val dy = y - start[1]
+                        if (!emojiSwiped && hypot(dx, dy) > 0.18f * safeRadius(size) &&
+                            abs(dx) > abs(dy)
+                        ) {
+                            emojiSwiped = true
+                            pressed = null
+                            removeCallbacks(deleteRepeat)
+                            flipEmojiPage(if (dx < 0) 1 else -1)
+                        } else if (!emojiSwiped) {
+                            updatePressed(x, y)
+                        }
+                    } else if (dist(start, floatArrayOf(x, y)) > GESTURE_START * safeRadius(size)) {
                         tracing = true                   // 进入滑行模式
                         pressed = null
                         removeCallbacks(deleteRepeat)
@@ -567,13 +710,16 @@ class RoundKeyboardView @JvmOverloads constructor(
             }
             MotionEvent.ACTION_UP -> {
                 removeCallbacks(deleteRepeat)
-                if (tracing) {
+                if (emojiSwiped) {
+                    // 横滑翻页已完成，不触发点按
+                } else if (tracing) {
                     finishGesture()
                 } else {
                     pressed?.let { fireKey(it) }
                 }
                 pressed = null
                 tracing = false
+                emojiSwiped = false
                 trace.clear()
                 invalidate()
                 return true
@@ -582,12 +728,24 @@ class RoundKeyboardView @JvmOverloads constructor(
                 removeCallbacks(deleteRepeat)
                 pressed = null
                 tracing = false
+                emojiSwiped = false
                 trace.clear()
                 invalidate()
                 return true
             }
         }
         return super.onTouchEvent(ev)
+    }
+
+    /** 表情面板横滑翻页 */
+    private fun flipEmojiPage(dir: Int) {
+        val list = currentEmojiList()
+        if (list.isEmpty()) return
+        val maxPage = (list.size + 19) / 20
+        emojiPage = ((emojiPage + dir) % maxPage + maxPage) % maxPage
+        SettingsStore.keyVibrate(context)
+        layoutKeys(width.toFloat(), height.toFloat())
+        invalidate()
     }
 
     // ============================== 按键动作 ==============================
@@ -613,8 +771,42 @@ class RoundKeyboardView @JvmOverloads constructor(
                 invalidate()
             }
             k.action == ACTION_MODE -> {
-                symbols = !symbols
+                mode = if (mode == MODE_SYMBOL) MODE_LETTER else MODE_SYMBOL
+                symPage = 0
                 relayout()
+            }
+            k.action == ACTION_EMOJI -> {
+                mode = if (mode == MODE_EMOJI) MODE_LETTER else MODE_EMOJI
+                if (mode == MODE_EMOJI && emojiCat == 0 && recentEmoji.isEmpty()) {
+                    emojiCat = 1   // 从未用过表情：默认进「笑脸」分类
+                    emojiPage = 0
+                }
+                relayout()
+            }
+            k.action == ACTION_SYMPAGE -> {
+                symPage = 1 - symPage
+                relayout()
+            }
+            k.action == ACTION_LETTER -> {
+                mode = MODE_LETTER
+                relayout()
+            }
+            k.action == ACTION_EMOJI_TAB -> {
+                emojiCat = k.candIndex
+                emojiPage = 0
+                relayout()
+            }
+            k.emoji && k.action < 0 -> {
+                // 表情直接上屏并记入「最近」
+                keyListener?.onText(k.text ?: return)
+                k.text?.let { e ->
+                    recentEmoji.remove(e)
+                    recentEmoji.add(0, e)
+                    if (recentEmoji.size > 30) recentEmoji.removeAt(recentEmoji.size - 1)
+                }
+                SettingsStore.keyVibrate(context)
+                layoutKeys(width.toFloat(), height.toFloat())
+                invalidate()
             }
             k.action == ACTION_DELETE -> handleDelete()
             k.action == ACTION_IME_PICKER || k.action == ACTION_HIDE ->
@@ -631,12 +823,12 @@ class RoundKeyboardView @JvmOverloads constructor(
                 val t0 = k.text!!
                 if (t0 == " ") {
                     handleSpace()
-                } else if (!symbols && store.hasDictionary) {
+                } else if (mode == MODE_LETTER && store.hasDictionary) {
                     buf.append(t0)                       // 有词库：字母进入组合串
                     updateCandidates()
                 } else {
                     var t = t0
-                    if (!symbols && shift && t.length == 1 && t[0].isLowerCase()) {
+                    if (mode == MODE_LETTER && shift && t.length == 1 && t[0].isLowerCase()) {
                         t = t.uppercase()
                     }
                     keyListener?.onText(t)
