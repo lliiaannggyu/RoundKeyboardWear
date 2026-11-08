@@ -13,9 +13,12 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
@@ -28,8 +31,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.ui.res.painterResource
 import java.io.InputStream
 
 /**
@@ -102,14 +107,14 @@ private fun RoundKbScreen(stats: MutableState<String>, onRefresh: () -> Unit) {
                 modifier = Modifier.padding(bottom = 4.dp)
             )
 
-            M3Button("去开启输入法") {
+            M3Button("去开启输入法", R.drawable.ic_settings) {
                 activity?.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
             }
-            M3Button("导入词库") {
+            M3Button("导入词库", R.drawable.ic_upload) {
                 picker.launch(arrayOf(
                     "text/plain", "text/tab-separated-values", "text/csv", "application/octet-stream"))
             }
-            M3Button("清空词库") {
+            M3Button("清空词库", R.drawable.ic_delete) {
                 WordStore.get(context).clear()
                 onRefresh()
             }
@@ -155,13 +160,20 @@ private fun queryName(activity: ComponentActivity, uri: Uri): String {
     }
 }
 
-/** M3 按钮封装：统一宽度与文字样式 */
+/** M3 按钮封装：统一宽度、Material 图标与文字样式 */
 @Composable
-private fun M3Button(label: String, onClick: () -> Unit) {
+private fun M3Button(label: String, iconRes: Int, onClick: () -> Unit) {
     Button(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(0.78f).padding(vertical = 2.dp)
     ) {
+        Icon(
+            painter = painterResource(iconRes),
+            contentDescription = null,
+            modifier = Modifier.size(15.dp),
+            tint = MaterialTheme.colorScheme.onPrimary
+        )
+        Spacer(Modifier.width(6.dp))
         Text(
             text = label,
             fontSize = 13.sp,

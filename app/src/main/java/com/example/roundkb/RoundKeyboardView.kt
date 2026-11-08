@@ -11,6 +11,7 @@ import android.util.AttributeSet
 import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import android.view.View
+import com.example.roundkb.R as AppR
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.max
@@ -91,6 +92,8 @@ class RoundKeyboardView @JvmOverloads constructor(
         var x = 0f; var y = 0f
         var hw = 0f; var hh = 0f   // 圆角矩形半宽/半高
         var control = false
+        /** Material Icons 矢量资源 id（非 0 时绘制图标而非文字） */
+        var iconRes: Int = 0
     }
 
     private val keys = mutableListOf<Key>()
@@ -229,11 +232,15 @@ class RoundKeyboardView @JvmOverloads constructor(
         addRow(bottom, y0f, cx, cy, R, unit)
     }
 
-    /** 底部控制区：123 / 宽胶囊空格 / ⏎ */
+    /** 底部控制区：123 / 宽胶囊空格 / ⏎（空格与回车为 Material Icons 矢量） */
     private fun addControls(cx: Float, cy: Float, R: Float) {
         addKey("123", null, ACTION_MODE, cx - 0.52f * R, cy + 0.585f * R, 0.130f * R, 0.115f * R, true)
-        addKey("␣", " ", -1, cx, cy + 0.630f * R, 0.360f * R, 0.125f * R, true)
-        addKey("⏎", null, ACTION_ENTER, cx + 0.52f * R, cy + 0.585f * R, 0.130f * R, 0.115f * R, true)
+        addKey("␣", " ", -1, cx, cy + 0.630f * R, 0.360f * R, 0.125f * R, true).apply {
+            iconRes = AppR.drawable.ic_space
+        }
+        addKey("⏎", null, ACTION_ENTER, cx + 0.52f * R, cy + 0.585f * R, 0.130f * R, 0.115f * R, true).apply {
+            iconRes = AppR.drawable.ic_return
+        }
     }
 
     /**
@@ -253,8 +260,12 @@ class RoundKeyboardView @JvmOverloads constructor(
             val x = cx + (i - (n - 1) / 2f) * unit
 
             when (s) {
-                "SHIFT" -> addKey("⇧", null, ACTION_SHIFT, x, y0, hw, hh, true)
-                "DEL" -> addKey("⌫", null, ACTION_DELETE, x, y0, hw, hh, true)
+                "SHIFT" -> addKey("⇧", null, ACTION_SHIFT, x, y0, hw, hh, true).apply {
+                    iconRes = AppR.drawable.ic_capslock
+                }
+                "DEL" -> addKey("⌫", null, ACTION_DELETE, x, y0, hw, hh, true).apply {
+                    iconRes = AppR.drawable.ic_backspace
+                }
                 "ABC", "123" -> addKey(s, null, ACTION_MODE, x, y0, hw, hh, true)
                 else -> {
                     addKey(s, s.lowercase(), -1, x, y0, hw, hh, false)
@@ -284,7 +295,7 @@ class RoundKeyboardView @JvmOverloads constructor(
     }
 
     private fun addKey(label: String, text: String?, action: Int,
-                       x: Float, y: Float, hw: Float, hh: Float, control: Boolean) {
+                       x: Float, y: Float, hw: Float, hh: Float, control: Boolean): Key {
         val k = Key()
         k.label = label
         k.text = text
@@ -295,6 +306,7 @@ class RoundKeyboardView @JvmOverloads constructor(
         k.hh = hh
         k.control = control
         keys.add(k)
+        return k
     }
 
     /** 边距限制：按键外缘（外接圆角估算）越出「安全圆」就沿径向收回 */
@@ -420,8 +432,27 @@ class RoundKeyboardView @JvmOverloads constructor(
             rectF.set(k.x - k.hw, k.y - k.hh, k.x + k.hw, k.y + k.hh)
             canvas.drawRoundRect(rectF, corner, corner, keyPaint)
 
+            // 图标键（Material Icons 矢量）：空格键有组合串时仍显示文字
+            val showIcon = k.iconRes != 0 && !(k.text == " " && buf.isNotEmpty())
+            if (showIcon) {
+                val dr = context.getDrawable(k.iconRes)
+                if (dr != null) {
+                    dr.setTint(txt)
+                    val s = min(k.hw, k.hh) * 1.10f   // 图标边长
+                    dr.setBounds(
+                        (k.x - s).toInt(), (k.y - s).toInt(),
+                        (k.x + s).toInt(), (k.y + s).toInt()
+                    )
+                    dr.draw(canvas)
+                    if (k.action == ACTION_SHIFT && capsLock) {   // 大写锁定指示点
+                        keyPaint.color = txt
+                        canvas.drawCircle(k.x + k.hw * 0.55f, k.y - k.hh * 0.62f, k.hh * 0.10f, keyPaint)
+                    }
+                    continue
+                }
+            }
+
             var label = k.label
-            if (k.action == ACTION_SHIFT && capsLock) label = "⇪"
             if (k.text == " " && buf.isNotEmpty()) label = buf.toString()   // 组合串显示在空格键
             val t = k.text
             if (t != null && !k.control && k.candIndex < 0 && shift && !symbols && !capsLock &&

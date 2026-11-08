@@ -96,8 +96,11 @@ app/src/main/java/com/example/roundkb/
 - [FlorisBoard](https://github.com/florisboard/florisboard)（Apache-2.0）—— `GlideDecoder.kt` 移植自其 `StatisticalGlideTypingClassifier`
 - [AnySoftKeyboard PR #1870](https://github.com/AnySoftKeyboard/AnySoftKeyboard/pull/1870)（Étienne Desticourt）—— 上述实现的源头
 - SHARK²：Kristensson & Zhai 的 shapewriter-on-keyboard 算法
+- [Material Symbols / Material Icons](https://fonts.google.com/icons)（Apache-2.0）—— 键盘功能键与应用图标的矢量图形
 
 ## 更新日志
+
+- **v1.6**：抛弃自绘/Unicode 字符图标，全面改用 **Material Icons 图标库**矢量资源：功能键（Shift=capslock、退格=backspace、回车=keyboard_return、空格=space_bar）、应用启动图标（Adaptive Icon，键盘图标 + Gboard 蓝）、设置页按钮图标（settings / upload / delete）
 
 - **v1.5**：布局改为 **Gboard 等宽键**（行宽随键数 10→9→9 递减，修复第一行反而最短的问题）；设置页引入 **Material 3 (Compose)** 组件库重构；APK 增大至 ~7.6MB（Compose 运行时）
 
