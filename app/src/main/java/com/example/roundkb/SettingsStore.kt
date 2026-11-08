@@ -12,6 +12,7 @@ object SettingsStore {
     private const val PREFS = "settings"
     private const val KEY_ICON = "icon_scale"
     private const val KEY_HAPTIC = "haptic_mode"
+    private const val KEY_KEY_SCALE = "key_scale"
 
     /** 震动档位 */
     const val HAPTIC_OFF = 0
@@ -21,6 +22,21 @@ object SettingsStore {
 
     private var iconScaleCache = Float.NaN
     private var hapticCache = -1
+    private var keyScaleCache = Float.NaN
+
+    /** 按键大小全局缩放（字母键/功能键整体，1.0 = 标准） */
+    fun keyScale(ctx: Context): Float {
+        if (!keyScaleCache.isNaN()) return keyScaleCache
+        val v = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getFloat(KEY_KEY_SCALE, 1.0f)
+        keyScaleCache = v
+        return v
+    }
+
+    fun setKeyScale(ctx: Context, value: Float) {
+        keyScaleCache = value
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putFloat(KEY_KEY_SCALE, value).apply()
+    }
 
     /** 功能键图标全局缩放（1.0 = 标准） */
     fun iconScale(ctx: Context): Float {

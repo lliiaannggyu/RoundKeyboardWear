@@ -159,6 +159,9 @@ class RoundKeyboardView @JvmOverloads constructor(
         invalidate()
     }
 
+    /** 设置（按键大小等）变更后由 IME 调用，下次弹出键盘即生效 */
+    fun refreshLayout() = relayout()
+
     private fun safeRadius(size: Float): Float = size / 2f - max(MIN_MARGIN_PX, size * MARGIN_FRACTION)
 
     private fun layoutKeys(w: Float, h: Float) {
@@ -177,7 +180,8 @@ class RoundKeyboardView @JvmOverloads constructor(
         // 键帽近方形略高（宽:高 ≈ 0.87:1），行间隙仅键高的 1/2.4。
         val dTop = 0.42f * R
         val chordTop = sqrt(max(0f, R * R - dTop * dTop))
-        val unit = 2f * chordTop * ROW_SPAN / 10f
+        // 全局按键缩放（设置页 小/标准/大）
+        val unit = 2f * chordTop * ROW_SPAN / 10f * SettingsStore.keyScale(context)
 
         if (!symbols) {
             if (candMode) {
@@ -234,11 +238,12 @@ class RoundKeyboardView @JvmOverloads constructor(
 
     /** 底部控制行：123 / 宽空格 / ⏎，紧跟字母区（Gboard Wear 式大空格） */
     private fun addControls(cx: Float, cy: Float, R: Float) {
-        addKey("123", null, ACTION_MODE, cx - 0.52f * R, cy + 0.40f * R, 0.130f * R, 0.115f * R, true)
-        addKey("␣", " ", -1, cx, cy + 0.40f * R, 0.360f * R, 0.125f * R, true).apply {
+        val s = SettingsStore.keyScale(context)   // 控制键随全局按键缩放
+        addKey("123", null, ACTION_MODE, cx - 0.52f * R, cy + 0.40f * R, 0.130f * R * s, 0.115f * R * s, true)
+        addKey("␣", " ", -1, cx, cy + 0.40f * R, 0.360f * R * s, 0.125f * R * s, true).apply {
             iconRes = AppR.drawable.ic_space
         }
-        addKey("⏎", null, ACTION_ENTER, cx + 0.52f * R, cy + 0.40f * R, 0.130f * R, 0.115f * R, true).apply {
+        addKey("⏎", null, ACTION_ENTER, cx + 0.52f * R, cy + 0.40f * R, 0.130f * R * s, 0.115f * R * s, true).apply {
             iconRes = AppR.drawable.ic_return
         }
     }
@@ -278,8 +283,9 @@ class RoundKeyboardView @JvmOverloads constructor(
     private fun addCandidateRow(y0f: Float, cx: Float, cy: Float, R: Float) {
         if (candidates.isEmpty()) return
         val y = cy + y0f * R
-        val hh = 0.085f * R
-        val spacing = 0.335f * R
+        val s = SettingsStore.keyScale(context)   // 候选胶囊随全局按键缩放
+        val hh = 0.085f * R * s
+        val spacing = 0.335f * R * s
         candidates.forEachIndexed { i, text ->
             val k = Key()
             k.label = text
@@ -287,7 +293,7 @@ class RoundKeyboardView @JvmOverloads constructor(
             k.candIndex = i
             k.x = cx + (i - (candidates.size - 1) / 2f) * spacing
             k.y = y
-            k.hw = 0.155f * R
+            k.hw = 0.155f * R * s
             k.hh = hh
             k.control = true
             keys.add(k)

@@ -88,6 +88,7 @@ private fun RoundKbScreen(stats: MutableState<String>, onRefresh: () -> Unit) {
 
     var iconScale by remember { mutableStateOf(SettingsStore.iconScale(context)) }
     var haptic by remember { mutableStateOf(SettingsStore.hapticMode(context)) }
+    var keyScale by remember { mutableStateOf(SettingsStore.keyScale(context)) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null && activity != null) {
@@ -130,6 +131,20 @@ private fun RoundKbScreen(stats: MutableState<String>, onRefresh: () -> Unit) {
                 }
                 ChoiceChip("大", iconScale == 1.25f) {
                     SettingsStore.setIconScale(context, 1.25f); iconScale = 1.25f
+                }
+            }
+
+            // ---- 按键大小 ----
+            SettingLabel("按键大小")
+            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                ChoiceChip("小", keyScale == 0.90f) {
+                    SettingsStore.setKeyScale(context, 0.90f); keyScale = 0.90f
+                }
+                ChoiceChip("标准", keyScale == 1.0f) {
+                    SettingsStore.setKeyScale(context, 1.0f); keyScale = 1.0f
+                }
+                ChoiceChip("大", keyScale == 1.10f) {
+                    SettingsStore.setKeyScale(context, 1.10f); keyScale = 1.10f
                 }
             }
 

@@ -32,9 +32,9 @@ class RoundIME : InputMethodService(), RoundKeyboardView.KeyListener {
 
     override fun onStartInput(attribute: EditorInfo?, restarting: Boolean) {
         super.onStartInput(attribute, restarting)
-        // 应用内更新词库后自动生效
+        // 应用内更新词库 / 全局设置（按键大小等）后自动生效
         WordStore.get(this).reloadIfChanged()
-        kb?.invalidate()
+        kb?.refreshLayout()
     }
 
     override fun onText(text: String) {
