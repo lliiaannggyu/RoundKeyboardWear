@@ -2,7 +2,7 @@
 <html lang="zh">
 <head>
 <meta charset="UTF-8">
-<title>圆屏26键 v1.4 — Gboard 直排 + SHARK² 滑动解码预览</title>
+<title>圆屏26键 v1.5 — Gboard 直排 + SHARK² 滑动 + M3 设置页</title>
 <style>
   body { margin:0; background:#141418; color:#eee; font-family:"PingFang SC","Microsoft YaHei",sans-serif;
          display:flex; flex-direction:column; align-items:center; min-height:100vh; }
@@ -31,7 +31,7 @@
 </style>
 </head>
 <body>
-<h1>圆屏 26 键 v1.4 — Gboard 直排 + SHARK² 滑动解码</h1>
+<h1>圆屏 26 键 v1.5 — 等宽键行宽递减 + SHARK² 滑动解码</h1>
 <p class="tip">鼠标/手指试试 <b>滑动手势</b>：在字母上连续滑动再抬起（如 h-e-l-l-o、n-i-h-a-o）。解码器与 APK 内同一套算法——<b>移植自 FlorisBoard 的 SHARK² 统计分类器</b>，不是把轨迹字母当输入。也可点按打字看候选纠错</p>
 <div class="controls">
   <button id="btnL" class="active">字母层</button>
@@ -43,7 +43,7 @@
   <svg class="trail" id="trail"></svg>
 </div>
 <div class="legend">
-  圆角矩形键帽 <b>水平直排</b>（Gboard 式，行宽按该行高度处弦长截取）；底部 <b>宽胶囊空格</b> + 123 / ⏎（Gboard 蓝）；候选词沿顶部弧排布、首选高亮；滑动解码：<b>端点剪枝 → 长度剪枝 → 形状高斯 + 位置高斯 + 词频</b>（FlorisBoard / SHARK²）
+  圆角矩形键帽 <b>等宽直排</b>（Gboard 式：三行同键宽、行宽随键数 10→9→9 递减，行居中）；底部 <b>宽胶囊空格</b> + 123 / ⏎（Gboard 蓝）；候选词沿顶部弧排布、首选高亮；滑动解码：<b>端点剪枝 → 长度剪枝 → 形状高斯 + 位置高斯 + 词频</b>（FlorisBoard / SHARK²）
   虚线圆 = 安全圆（5% 外边距 + 越界径向拉回）。组合串显示在空格键上；漏按/错按有 <b>1 次编辑纠错</b>。
 </div>
 <script>
@@ -77,14 +77,17 @@ let symbols=false, shift=false, caps=false;
 
 const ROW_SPAN=0.88;
 function addArcRow(items, y0f, cx, cy, R, out, letterPos){
-  const y0=cy+y0f*R, dy=y0f*R;
-  const chordHalf=Math.sqrt(Math.max(0,R*R-dy*dy)), halfSpan=chordHalf*ROW_SPAN;
-  if(!items.length||halfSpan<=0) return;
-  const step=2*halfSpan/items.length, keyR=Math.min(0.092*R, step*0.52);
+  // Gboard 式等宽键：步距按最宽行（10 键）× 顶部行弦长统一确定，
+  // 三行同宽 → 行宽随键数自然递减（10 → 9 → 9）
+  const y0=cy+y0f*R, n=items.length;
+  if(!n) return;
+  const dTop=0.44*R, chordTop=Math.sqrt(Math.max(0,R*R-dTop*dTop));
+  const unit=2*chordTop*ROW_SPAN/10;
+  const hw=unit*0.48, hh=unit*0.60;
   items.forEach((s,i)=>{
-    const x=cx-halfSpan+step*(i+0.5), y=y0;
-    if(s==="SHIFT"||s==="DEL"||s==="ABC"||s==="123") out.push({label:s,x,y,hw:keyR,hh:keyR,ctl:true});
-    else { out.push({label:s,text:s.toLowerCase(),x,y,hw:keyR,hh:keyR}); if(letterPos) letterPos[s.toLowerCase()]=[x,y]; }
+    const x=cx+(i-(n-1)/2)*unit, y=y0;
+    if(s==="SHIFT"||s==="DEL"||s==="ABC"||s==="123") out.push({label:s,x,y,hw,hh,ctl:true});
+    else { out.push({label:s,text:s.toLowerCase(),x,y,hw,hh}); if(letterPos) letterPos[s.toLowerCase()]=[x,y]; }
   });
 }
 function layout(w, h, candList){

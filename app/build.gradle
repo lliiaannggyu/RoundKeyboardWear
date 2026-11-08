@@ -11,8 +11,8 @@ android {
         applicationId "com.example.roundkb"
         minSdk 26          // Wear OS 3+ (API 26)
         targetSdk 34
-        versionCode 5
-        versionName "1.4"
+        versionCode 6
+        versionName "1.5"
     }
 
     buildTypes {
@@ -29,8 +29,24 @@ android {
     kotlinOptions {
         jvmTarget = '11'
     }
+
+    buildFeatures {
+        compose true       // 设置页使用 Wear Compose Material3
+    }
+
+    composeOptions {
+        // 与 Kotlin 1.9.24 对应的 Compose 编译器
+        kotlinCompilerExtensionVersion '1.5.14'
+    }
 }
 
 dependencies {
-    // 仅 Kotlin 标准库（随插件自动添加），无其他第三方依赖
+    // ---- Material 3 (Compose 组件库本体) ----
+    // 注：Wear 专属 androidx.wear.compose:compose-material3 的稳定线（1.5+）
+    // 需要 Kotlin 2.x + compileSdk 36 整条链升级，此处使用 API 同源的
+    // androidx.compose.material3（M3 组件库），当前工具链完全兼容。
+    implementation 'androidx.activity:activity-compose:1.9.0'
+    implementation 'androidx.compose.ui:ui:1.6.7'
+    implementation 'androidx.compose.foundation:foundation:1.6.7'
+    implementation 'androidx.compose.material3:material3:1.2.1'
 }

@@ -170,25 +170,31 @@ class RoundKeyboardView @JvmOverloads constructor(
 
         val candMode = buf.isNotEmpty() && candidates.isNotEmpty()
 
+        // 等宽键步距：按最宽行（10 键）× 顶部行（最靠边、弦最短）确定，
+        // 三行共用同一步距 → 行宽随键数自然递减（10 → 9 → 9），Gboard 式。
+        val dTop = 0.44f * R
+        val chordTop = sqrt(max(0f, R * R - dTop * dTop))
+        val unit = 2f * chordTop * ROW_SPAN / 10f
+
         if (!symbols) {
             if (candMode) {
                 addCandidateRow(-0.66f, cx, cy, R)
-                addRow(ROW0, -0.42f, cx, cy, R)
-                addRow(ROW1, -0.10f, cx, cy, R)
-                addBottomRow(0.22f, cx, cy, R)
+                addRow(ROW0, -0.42f, cx, cy, R, unit)
+                addRow(ROW1, -0.10f, cx, cy, R, unit)
+                addBottomRow(0.22f, cx, cy, R, unit)
             } else {
-                addRow(ROW0, -0.44f, cx, cy, R)
-                addRow(ROW1, -0.12f, cx, cy, R)
-                addBottomRow(0.20f, cx, cy, R)
+                addRow(ROW0, -0.44f, cx, cy, R, unit)
+                addRow(ROW1, -0.12f, cx, cy, R, unit)
+                addBottomRow(0.20f, cx, cy, R, unit)
             }
             addControls(cx, cy, R)
         } else {
-            addRow(SYM0, -0.44f, cx, cy, R)
-            addRow(SYM1, -0.12f, cx, cy, R)
+            addRow(SYM0, -0.44f, cx, cy, R, unit)
+            addRow(SYM1, -0.12f, cx, cy, R, unit)
             val bottom = mutableListOf("ABC")
             bottom.addAll(SYM2)
             bottom.add("DEL")
-            addRow(bottom, 0.20f, cx, cy, R)
+            addRow(bottom, 0.20f, cx, cy, R, unit)
             addControls(cx, cy, R)
         }
 
@@ -215,12 +221,12 @@ class RoundKeyboardView @JvmOverloads constructor(
         decoder = d
     }
 
-    /** 底排：⇧ + Z..M + ⌫（shift/退格与字母同行，Gboard 式） */
-    private fun addBottomRow(y0f: Float, cx: Float, cy: Float, R: Float) {
+    /** 底排：⇧ + Z..M + ⌫（shift/退格与字母同行等宽，Gboard 式） */
+    private fun addBottomRow(y0f: Float, cx: Float, cy: Float, R: Float, unit: Float) {
         val bottom = mutableListOf("SHIFT")
         bottom.addAll(ROW2)
         bottom.add("DEL")
-        addRow(bottom, y0f, cx, cy, R)
+        addRow(bottom, y0f, cx, cy, R, unit)
     }
 
     /** 底部控制区：123 / 宽胶囊空格 / ⏎ */
@@ -231,29 +237,27 @@ class RoundKeyboardView @JvmOverloads constructor(
     }
 
     /**
-     * 水平直排一行按键（Gboard 式，不做弧形弯曲）。
-     * 行宽 = 该行高度处圆弧弦长 × ROW_SPAN，两端自然收进圆内。
-     * @param y0f 行中心纵向偏移（相对 R，负 = 上方）
+     * 水平直排一行按键（Gboard 式：等宽键，行居中，行宽随键数递减）。
+     * @param y0f  行中心纵向偏移（相对 R，负 = 上方）
+     * @param unit 等宽键步距（键心间距），由 layoutKeys 按最宽行统一确定
      */
-    private fun addRow(items: List<String>, y0f: Float, cx: Float, cy: Float, R: Float) {
+    private fun addRow(items: List<String>, y0f: Float, cx: Float, cy: Float, R: Float, unit: Float) {
         val y0 = cy + y0f * R
-        val dy = y0f * R
-        val chordHalf = sqrt(max(0f, R * R - dy * dy))
-        val halfSpan = chordHalf * ROW_SPAN
-        if (items.isEmpty() || halfSpan <= 0f) return
+        val n = items.size
+        if (n == 0 || unit <= 0f) return
 
-        val step = 2f * halfSpan / items.size
-        val keyR = min(0.092f * R, step * 0.52f)
+        val hw = unit * 0.48f          // 键帽半宽（步距的 96%，留出键间隙）
+        val hh = unit * 0.60f          // 键帽半高（略高于宽，Gboard 键更高）
 
         for ((i, s) in items.withIndex()) {
-            val x = cx - halfSpan + step * (i + 0.5f)
+            val x = cx + (i - (n - 1) / 2f) * unit
 
             when (s) {
-                "SHIFT" -> addKey("⇧", null, ACTION_SHIFT, x, y0, keyR, keyR, true)
-                "DEL" -> addKey("⌫", null, ACTION_DELETE, x, y0, keyR, keyR, true)
-                "ABC", "123" -> addKey(s, null, ACTION_MODE, x, y0, keyR, keyR, true)
+                "SHIFT" -> addKey("⇧", null, ACTION_SHIFT, x, y0, hw, hh, true)
+                "DEL" -> addKey("⌫", null, ACTION_DELETE, x, y0, hw, hh, true)
+                "ABC", "123" -> addKey(s, null, ACTION_MODE, x, y0, hw, hh, true)
                 else -> {
-                    addKey(s, s.lowercase(), -1, x, y0, keyR, keyR, false)
+                    addKey(s, s.lowercase(), -1, x, y0, hw, hh, false)
                 }
             }
         }
