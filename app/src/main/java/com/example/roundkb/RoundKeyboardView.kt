@@ -284,14 +284,14 @@ class RoundKeyboardView @JvmOverloads constructor(
 
     /** 表情层：分类页签 + 5×4 网格（横滑翻页，页码圆点在 onDraw 画） */
     private fun addEmojiGrid(cx: Float, cy: Float, R: Float, s: Float) {
-        // 分类页签
-        val tabY = cy - 0.58f * R
+        // 分类页签（页签之间留出明显间隙，避免挤成一条线）
+        val tabY = cy - 0.56f * R
         val tabN = EmojiData.names.size
-        val tabSpacing = 0.088f * R
+        val tabSpacing = 0.105f * R
         for (i in 0 until tabN) {
             val x = cx + (i - (tabN - 1) / 2f) * tabSpacing
             addKey(EmojiData.tabIcons[i], null, ACTION_EMOJI_TAB, x, tabY,
-                0.042f * R, 0.038f * R, true).apply {
+                0.048f * R, 0.045f * R, true).apply {
                 emoji = true
                 candIndex = i
                 if (i == emojiCat) noFill = false else noFill = true
@@ -305,12 +305,13 @@ class RoundKeyboardView @JvmOverloads constructor(
         val maxPage = (list.size + perPage - 1) / perPage
         if (emojiPage >= maxPage) emojiPage = maxPage - 1
         val items = list.drop(emojiPage * perPage).take(perPage)
-        val dTop = 0.36f * R
+        val dTop = 0.33f * R
         val chord = sqrt(max(0f, R * R - dTop * dTop))
-        val unitE = 2f * chord * 0.92f / 5f * s
-        val ys = listOf(-0.36f, -0.15f, 0.06f, 0.27f)
+        // 横向步距设上限：按键放大（keyScale 大）时也不越出圆屏
+        val unitE = min(2f * chord * 0.92f / 5f * s, 0.37f * R)
+        val ys = listOf(-0.33f, -0.13f, 0.07f, 0.27f)
         val hw = unitE * 0.48f
-        val hh = 0.115f * R * s
+        val hh = 0.105f * R * s
         items.forEachIndexed { idx, e ->
             val row = idx / 5
             val col = idx % 5
@@ -614,16 +615,12 @@ class RoundKeyboardView @JvmOverloads constructor(
                 val list = currentEmojiList()
                 val maxPage = (list.size + 19) / 20
                 keyPaint.color = COLOR_ACCENT
+                // 页码圆点：网格底(0.375R)与底排顶(0.44R)之间的空隙
                 for (i in 0 until maxPage) {
-                    if (i != emojiPage) {
-                        keyPaint.color = COLOR_PRESSED
-                        canvas.drawCircle(cx + (i - (maxPage - 1) / 2f) * 0.055f * R,
-                            cy + 0.47f * R, 0.009f * R, keyPaint)
-                        keyPaint.color = COLOR_ACCENT
-                    } else {
-                        canvas.drawCircle(cx + (i - (maxPage - 1) / 2f) * 0.055f * R,
-                            cy + 0.47f * R, 0.009f * R, keyPaint)
-                    }
+                    val dotX = cx + (i - (maxPage - 1) / 2f) * 0.055f * R
+                    if (i != emojiPage) keyPaint.color = COLOR_PRESSED
+                    canvas.drawCircle(dotX, cy + 0.41f * R, 0.010f * R, keyPaint)
+                    keyPaint.color = COLOR_ACCENT
                 }
             }
         }
