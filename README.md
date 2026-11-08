@@ -100,6 +100,8 @@ app/src/main/java/com/example/roundkb/
 
 ## 更新日志
 
+- **v1.8**：键帽改为**横向扁宽长方形**（宽:高 ≈ 1.27:1，此前 v1.7 只是近方形），键距再外扩（ROW_SPAN 0.94、顶行 0.40R），行距收紧、字母字号放大补偿
+
 - **v1.7**：**加宽键盘字母键**——键距（ROW_SPAN 0.88→0.93）与顶行位置（0.44R→0.42R）外扩，键帽高比 0.60→0.52 改为近方形观感，字母字号相应放大；安全圆余量 3.5%→2%
 
 - **v1.6**：抛弃自绘/Unicode 字符图标，全面改用 **Material Icons 图标库**矢量资源：功能键（Shift=capslock、退格=backspace、回车=keyboard_return、空格=space_bar）、应用启动图标（Adaptive Icon，键盘图标 + Gboard 蓝）、设置页按钮图标（settings / upload / delete）
