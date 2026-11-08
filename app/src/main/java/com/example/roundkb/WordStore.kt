@@ -149,17 +149,23 @@ class WordStore private constructor(context: Context) {
         return out.toList()
     }
 
+    /** 滑行输入候选词（key 匹配用、value 上屏用、freq 打分用），按 value 去重保留最高词频 */
+    class GestureWord(val key: String, val value: String, val freq: Int)
+
     /** 滑行输入过滤：首字母相同 + 尾字母相同的词（cap 防止超长词库拖慢打分） */
-    fun gestureFilter(first: String, last: String, cap: Int): List<String> {
-        val out = LinkedHashSet<String>()
+    fun gestureFilter(first: String, last: String, cap: Int): List<GestureWord> {
+        val out = LinkedHashMap<String, GestureWord>()
         var i = lowerBound(first)
         while (i < sorted.size && out.size < cap) {
             val e = sorted[i]
             if (!e.key.startsWith(first)) break
-            if (e.key.length >= 2 && e.key.endsWith(last)) out.add(e.value)
+            if (e.key.length >= 2 && e.key.endsWith(last)) {
+                val cur = out[e.value]
+                if (cur == null || cur.freq < e.freq) out[e.value] = GestureWord(e.key, e.value, e.freq)
+            }
             i++
         }
-        return out.toList()
+        return out.values.toList()
     }
 
     private fun lowerBound(p: String): Int {

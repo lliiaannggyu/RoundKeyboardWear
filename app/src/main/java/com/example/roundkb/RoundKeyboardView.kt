@@ -20,15 +20,20 @@ import kotlin.math.sqrt
 /**
  * 圆屏 26 键键盘视图 —— Gboard for Wear OS 风格（Kotlin / v1.2）。
  *
- * 布局（Gboard 圆表盘设计语言）：
- *  - 字母键为圆角矩形键帽，三排沿同心圆弧排布，两端收进圆内；
+ * 布局（Gboard for Wear OS 式**直排**）：
+ *  - 三排按键为水平直线（不做弧形弯曲），每排宽度按「该行高度处的圆弧弦长」截取，
+ *    两端自然落在圆内，整体贴合 Gboard 表盘键盘的观感；
  *  - 底部一条「宽胶囊空格」，两侧 123 / ⏎ 胶囊功能键（回车 Gboard 蓝）；
- *  - 候选词沿表盘顶部弧排布，首选高亮；
+ *  - 候选词沿顶部横排，首选高亮；
  *  - 双重边距限制：外边距 + 越出安全圆自动径向拉回。
  *
  * 输入能力：
  *  - 组合输入 + 词库候选 + 1 次编辑纠错（漏按 / 错按 / 插入修正）；
- *  - 滑行手势输入：轨迹等弧长重采样，与「首尾字母一致」的词做路径贴合打分；
+ *  - 滑行手势输入（不要求轨迹逐字母命中）：
+ *      ① 首尾字母一致过滤；② 词字母序列须为轨迹字母序列的**子序列**（允许路过别的键）；
+ *      ③ 理想路径与轨迹的**双向 Chamfer 距离**（覆盖 + 蜿蜒惩罚）；
+ *      ④ 词的每个字母键都被轨迹经过（键心到轨迹最小距离均值）；
+ *      ⑤ 词频加成。综合打分取最优 3 个；
  *  - 未导入词库时字母直通上屏。
  */
 class RoundKeyboardView @JvmOverloads constructor(
@@ -73,6 +78,9 @@ class RoundKeyboardView @JvmOverloads constructor(
         private val SYM0 = "1234567890".map { it.toString() }
         private val SYM1 = listOf("@", "#", "￥", "%", "&", "*", "-", "+", "/")
         private val SYM2 = listOf(".", ",", "?", "!", "'", "\"", ":")
+
+        /** 行宽占该高度处圆弧弦长的比例（直排下控制左右边距） */
+        private const val ROW_SPAN = 0.88f
     }
 
     private class Key {
@@ -165,34 +173,34 @@ class RoundKeyboardView @JvmOverloads constructor(
         if (!symbols) {
             if (candMode) {
                 addCandidateRow(-0.66f, cx, cy, R)
-                addArcRow(ROW0, -0.42f, +0.100f, 0.86f, cx, cy, R)
-                addArcRow(ROW1, -0.10f, +0.030f, 0.90f, cx, cy, R)
+                addRow(ROW0, -0.42f, cx, cy, R)
+                addRow(ROW1, -0.10f, cx, cy, R)
                 addBottomRow(0.22f, cx, cy, R)
             } else {
-                addArcRow(ROW0, -0.44f, +0.100f, 0.86f, cx, cy, R)
-                addArcRow(ROW1, -0.12f, +0.030f, 0.90f, cx, cy, R)
+                addRow(ROW0, -0.44f, cx, cy, R)
+                addRow(ROW1, -0.12f, cx, cy, R)
                 addBottomRow(0.20f, cx, cy, R)
             }
             addControls(cx, cy, R)
         } else {
-            addArcRow(SYM0, -0.44f, +0.100f, 0.86f, cx, cy, R)
-            addArcRow(SYM1, -0.12f, +0.030f, 0.90f, cx, cy, R)
+            addRow(SYM0, -0.44f, cx, cy, R)
+            addRow(SYM1, -0.12f, cx, cy, R)
             val bottom = mutableListOf("ABC")
             bottom.addAll(SYM2)
             bottom.add("DEL")
-            addArcRow(bottom, 0.20f, -0.100f, 0.86f, cx, cy, R)
+            addRow(bottom, 0.20f, cx, cy, R)
             addControls(cx, cy, R)
         }
 
         clampToSafeCircle(cx, cy, R)
     }
 
-    /** 底排：⇧ + Z..M + ⌫（shift/退格与字母同弧，Gboard 式） */
+    /** 底排：⇧ + Z..M + ⌫（shift/退格与字母同行，Gboard 式） */
     private fun addBottomRow(y0f: Float, cx: Float, cy: Float, R: Float) {
         val bottom = mutableListOf("SHIFT")
         bottom.addAll(ROW2)
         bottom.add("DEL")
-        addArcRow(bottom, y0f, -0.100f, 0.86f, cx, cy, R)
+        addRow(bottom, y0f, cx, cy, R)
     }
 
     /** 底部控制区：123 / 宽胶囊空格 / ⏎ */
@@ -203,17 +211,15 @@ class RoundKeyboardView @JvmOverloads constructor(
     }
 
     /**
-     * 沿圆弧排一行按键。
-     * @param y0f    行中心纵向偏移（相对 R，负 = 上方）
-     * @param curvef 弧度系数（正 = 两端下垂、负 = 两端上翘）
-     * @param spanF  行宽占该高度处圆弧弦长的比例
+     * 水平直排一行按键（Gboard 式，不做弧形弯曲）。
+     * 行宽 = 该行高度处圆弧弦长 × ROW_SPAN，两端自然收进圆内。
+     * @param y0f 行中心纵向偏移（相对 R，负 = 上方）
      */
-    private fun addArcRow(items: List<String>, y0f: Float, curvef: Float, spanF: Float,
-                          cx: Float, cy: Float, R: Float) {
+    private fun addRow(items: List<String>, y0f: Float, cx: Float, cy: Float, R: Float) {
         val y0 = cy + y0f * R
         val dy = y0f * R
         val chordHalf = sqrt(max(0f, R * R - dy * dy))
-        val halfSpan = chordHalf * spanF
+        val halfSpan = chordHalf * ROW_SPAN
         if (items.isEmpty() || halfSpan <= 0f) return
 
         val step = 2f * halfSpan / items.size
@@ -221,16 +227,14 @@ class RoundKeyboardView @JvmOverloads constructor(
 
         for ((i, s) in items.withIndex()) {
             val x = cx - halfSpan + step * (i + 0.5f)
-            val t = if (halfSpan == 0f) 0f else (x - cx) / halfSpan
-            val y = y0 + curvef * R * t * t
 
             when (s) {
-                "SHIFT" -> addKey("⇧", null, ACTION_SHIFT, x, y, keyR, keyR, true)
-                "DEL" -> addKey("⌫", null, ACTION_DELETE, x, y, keyR, keyR, true)
-                "ABC", "123" -> addKey(s, null, ACTION_MODE, x, y, keyR, keyR, true)
+                "SHIFT" -> addKey("⇧", null, ACTION_SHIFT, x, y0, keyR, keyR, true)
+                "DEL" -> addKey("⌫", null, ACTION_DELETE, x, y0, keyR, keyR, true)
+                "ABC", "123" -> addKey(s, null, ACTION_MODE, x, y0, keyR, keyR, true)
                 else -> {
-                    addKey(s, s.lowercase(), -1, x, y, keyR, keyR, false)
-                    letterPos[s.lowercase()[0]] = floatArrayOf(x, y)
+                    addKey(s, s.lowercase(), -1, x, y0, keyR, keyR, false)
+                    letterPos[s.lowercase()[0]] = floatArrayOf(x, y0)
                 }
             }
         }
@@ -393,14 +397,22 @@ class RoundKeyboardView @JvmOverloads constructor(
 
         val ts = resample(trace, GESTURE_SAMPLES) ?: return out
         val traceLen = pathLength(trace)
-        val words = store.gestureFilter(seq.first(), seq.last(), 4000)
+        val R = safeRadius(min(width, height).toFloat())
+        val seqStr = seq.joinToString("")
+        val words = store.gestureFilter(seq.first(), seq.last(), 6000)
 
-        val scored = mutableListOf<Pair<String, Float>>()
-        for (w in words) {
+        // 综合打分：双向 Chamfer（路径贴合 + 蜿蜒惩罚）+ 字母必经性 + 长度差 - 词频加成
+        data class Scored(val value: String, val cost: Float, val freq: Int)
+        val scored = mutableListOf<Scored>()
+        for (gw in words) {
+            // 词字母序列必须是轨迹字母序列的子序列（允许路过别的键，但顺序不能乱）
+            if (!isSubsequence(gw.key, seqStr)) continue
+
+            // 理想路径：词的键心折线（相邻去重）
             val ideal = mutableListOf<FloatArray>()
             var prev: FloatArray? = null
             var ok = true
-            for (ch in w) {
+            for (ch in gw.key) {
                 val c = letterPos[ch]
                 if (c == null) { ok = false; break }
                 if (prev == null || dist(prev, c) > 0.01f) ideal.add(c)
@@ -409,27 +421,67 @@ class RoundKeyboardView @JvmOverloads constructor(
             if (!ok || ideal.size < 2) continue
 
             val isamp = resample(ideal, GESTURE_SAMPLES) ?: continue
-            var cost = 0f
+
+            // c1：理想路径每点到轨迹的最小距离（覆盖：词的路径要贴着轨迹走）
+            // c2：轨迹每点到理想路径的最小距离（蜿蜒：轨迹别乱跑）
+            var c1 = 0f
+            var c2 = 0f
             for (i in 0 until GESTURE_SAMPLES) {
-                var best = Float.MAX_VALUE
-                for (t in ts) {
-                    val d = dist(isamp[i], t)
-                    if (d < best) best = d
+                var b1 = Float.MAX_VALUE
+                var b2 = Float.MAX_VALUE
+                for (j in 0 until GESTURE_SAMPLES) {
+                    val d1 = dist(isamp[i], ts[j])
+                    if (d1 < b1) b1 = d1
+                    val d2 = dist(ts[i], isamp[j])
+                    if (d2 < b2) b2 = d2
                 }
-                cost += best
+                c1 += b1
+                c2 += b2
             }
-            cost /= GESTURE_SAMPLES
+
+            // 必经性：词的每个字母键心都应被轨迹经过（取最小距离均值）
+            var visit = 0f
+            var nLetters = 0
+            var prevCh = ' '
+            for (ch in gw.key) {
+                if (ch == prevCh) continue
+                prevCh = ch
+                val c = letterPos[ch] ?: continue
+                var bd = Float.MAX_VALUE
+                for (t in ts) {
+                    val d = dist(c, t)
+                    if (d < bd) bd = d
+                }
+                visit += bd
+                nLetters++
+            }
+            if (nLetters > 0) visit /= nLetters
+
             var idealLen = 0f
             for (i in 1 until ideal.size) idealLen += dist(ideal[i - 1], ideal[i])
-            cost += 0.15f * abs(idealLen - traceLen)      // 长度差惩罚
-            scored.add(w to cost)
+
+            val freqBonus = min(0.10f, 0.03f * kotlin.math.ln(1f + gw.freq))
+            val cost = 0.5f * (c1 + c2) / (GESTURE_SAMPLES * R) +
+                    0.35f * visit / R +
+                    0.15f * abs(idealLen - traceLen) / R -
+                    freqBonus
+            scored.add(Scored(gw.value, cost, gw.freq))
         }
-        scored.sortBy { it.second }
-        for ((w, cost) in scored) {
+        scored.sortWith(compareBy<Scored> { it.cost }.thenByDescending { it.freq })
+        for (s in scored) {
             if (out.size >= 3) break
-            if (cost < 0.6f) out.add(w)
+            if (s.cost < 0.50f) out.add(s.value)
         }
         return out
+    }
+
+    /** s 是否为 of 的子序列（手势轨迹允许带多余字母，但词字母顺序必须一致） */
+    private fun isSubsequence(s: String, of: String): Boolean {
+        var i = 0
+        for (c in of) {
+            if (i < s.length && s[i] == c) i++
+        }
+        return i == s.length
     }
 
     private fun finishGesture() {
