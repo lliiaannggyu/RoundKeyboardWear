@@ -34,7 +34,7 @@
             android:layout_marginTop="12dp"
             android:lineSpacingExtra="4dp"
             android:textSize="14sp"
-            android:text="1. 点「去开启输入法」勾选「圆屏26键」\n2. 在输入框长按 → 切换输入法 → 选「圆屏26键」\n3. 点「导入词库」选择 UTF-8 文本文件（.txt），导入即生效\n\n词库格式（每行一条）：\n· 单词一行：hello\n· 拼音 词：nihao 你好\n· 键 TAB 值 TAB 词频\n· # 开头为注释" />
+            android:text="1. 点「去开启输入法」勾选「圆屏26键」\n2. 在输入框长按 → 切换输入法 → 选「圆屏26键」\n3. 点「导入词库」选择 UTF-8 文本（.txt），导入即生效\n\n输入技巧：\n· 滑动输入：在字母间连续滑动，抬起自动匹配整词\n· 智能纠错：漏按/错按自动修正（1 次编辑距离）\n· 空格=上屏首选，回车=上屏原始字母，⇧双击=锁定大写" />
 
         <Button
             android:id="@+id/btn_import"

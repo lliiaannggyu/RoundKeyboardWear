@@ -1,4 +1,5 @@
-// 根构建脚本：只声明 AGP 插件版本
+// 根构建脚本：声明 AGP 与 Kotlin 插件版本（均走阿里云镜像）
 plugins {
     id 'com.android.application' version '8.5.2' apply false
+    id 'org.jetbrains.kotlin.android' version '1.9.24' apply false
 }
