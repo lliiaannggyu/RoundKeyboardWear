@@ -81,7 +81,7 @@ class RoundKeyboardView @JvmOverloads constructor(
         private val SYM2 = listOf(".", ",", "?", "!", "'", "\"", ":")
 
         /** 行宽占该高度处圆弧弦长的比例（直排下控制左右边距） */
-        private const val ROW_SPAN = 0.94f
+        private const val ROW_SPAN = 0.90f
     }
 
     private class Key {
@@ -173,31 +173,32 @@ class RoundKeyboardView @JvmOverloads constructor(
 
         val candMode = buf.isNotEmpty() && candidates.isNotEmpty()
 
-        // 等宽键步距：按最宽行（10 键）× 顶部行（最靠边、弦最短）确定，
-        // 三行共用同一步距 → 行宽随键数自然递减（10 → 9 → 9），Gboard 式。
-        val dTop = 0.40f * R
+        // Gboard for Wear OS 式紧凑填满布局：
+        // 四行（3 字母行 + 控制行）行距统一 0.25R 紧凑堆叠，纵向撑满圆盘中带；
+        // 键帽近方形略高（宽:高 ≈ 0.87:1），行间隙仅键高的 1/2.4。
+        val dTop = 0.42f * R
         val chordTop = sqrt(max(0f, R * R - dTop * dTop))
         val unit = 2f * chordTop * ROW_SPAN / 10f
 
         if (!symbols) {
             if (candMode) {
-                addCandidateRow(-0.62f, cx, cy, R)
+                addCandidateRow(-0.56f, cx, cy, R)
                 addRow(ROW0, -0.38f, cx, cy, R, unit)
-                addRow(ROW1, -0.10f, cx, cy, R, unit)
-                addBottomRow(0.16f, cx, cy, R, unit)
+                addRow(ROW1, -0.13f, cx, cy, R, unit)
+                addBottomRow(0.12f, cx, cy, R, unit)
             } else {
-                addRow(ROW0, -0.40f, cx, cy, R, unit)
-                addRow(ROW1, -0.12f, cx, cy, R, unit)
-                addBottomRow(0.16f, cx, cy, R, unit)
+                addRow(ROW0, -0.42f, cx, cy, R, unit)
+                addRow(ROW1, -0.17f, cx, cy, R, unit)
+                addBottomRow(0.08f, cx, cy, R, unit)
             }
             addControls(cx, cy, R)
         } else {
-            addRow(SYM0, -0.40f, cx, cy, R, unit)
-            addRow(SYM1, -0.12f, cx, cy, R, unit)
+            addRow(SYM0, -0.42f, cx, cy, R, unit)
+            addRow(SYM1, -0.17f, cx, cy, R, unit)
             val bottom = mutableListOf("ABC")
             bottom.addAll(SYM2)
             bottom.add("DEL")
-            addRow(bottom, 0.16f, cx, cy, R, unit)
+            addRow(bottom, 0.08f, cx, cy, R, unit)
             addControls(cx, cy, R)
         }
 
@@ -232,13 +233,13 @@ class RoundKeyboardView @JvmOverloads constructor(
         addRow(bottom, y0f, cx, cy, R, unit)
     }
 
-    /** 底部控制区：123 / 宽胶囊空格 / ⏎（空格与回车为 Material Icons 矢量） */
+    /** 底部控制行：123 / 宽空格 / ⏎，紧跟字母区（Gboard Wear 式大空格） */
     private fun addControls(cx: Float, cy: Float, R: Float) {
-        addKey("123", null, ACTION_MODE, cx - 0.52f * R, cy + 0.585f * R, 0.130f * R, 0.115f * R, true)
-        addKey("␣", " ", -1, cx, cy + 0.630f * R, 0.360f * R, 0.125f * R, true).apply {
+        addKey("123", null, ACTION_MODE, cx - 0.52f * R, cy + 0.40f * R, 0.130f * R, 0.115f * R, true)
+        addKey("␣", " ", -1, cx, cy + 0.40f * R, 0.360f * R, 0.125f * R, true).apply {
             iconRes = AppR.drawable.ic_space
         }
-        addKey("⏎", null, ACTION_ENTER, cx + 0.52f * R, cy + 0.585f * R, 0.130f * R, 0.115f * R, true).apply {
+        addKey("⏎", null, ACTION_ENTER, cx + 0.52f * R, cy + 0.40f * R, 0.130f * R, 0.115f * R, true).apply {
             iconRes = AppR.drawable.ic_return
         }
     }
@@ -253,8 +254,8 @@ class RoundKeyboardView @JvmOverloads constructor(
         val n = items.size
         if (n == 0 || unit <= 0f) return
 
-        val hw = unit * 0.48f          // 键帽半宽（步距的 96%，留出键间隙）
-        val hh = unit * 0.38f          // 键帽半高（宽:高 ≈ 1.27:1，横向扁宽键）
+        val hw = unit * 0.48f          // 键帽半宽（步距的 96%，键间隙仅 4% 步距）
+        val hh = unit * 0.55f          // 键帽半高（近方形略高，Gboard Wear 式饱满键帽）
 
         for ((i, s) in items.withIndex()) {
             val x = cx + (i - (n - 1) / 2f) * unit
@@ -461,7 +462,7 @@ class RoundKeyboardView @JvmOverloads constructor(
                 label = label.uppercase()
             }
 
-            var size = k.hh * (if (k.control) 1.5f else 2.2f)
+            var size = k.hh * (if (k.control) 1.5f else 1.7f)
             if (label.length > 2) {
                 val fit = k.hw * 1.8f / (0.60f * label.length)
                 size = min(size, fit)
