@@ -51,6 +51,8 @@ class RoundKeyboardView @JvmOverloads constructor(
         const val ACTION_DELETE = 2
         const val ACTION_ENTER = 3
         const val ACTION_MODE = 4
+        const val ACTION_IME_PICKER = 5   // ‹ 切换输入法
+        const val ACTION_HIDE = 6         // ✕ 收起键盘
 
         // ---- 几何参数（按表盘大小微调） ----
         private const val MARGIN_FRACTION = 0.05f    // 外边距占直径比例
@@ -91,6 +93,8 @@ class RoundKeyboardView @JvmOverloads constructor(
         var x = 0f; var y = 0f
         var hw = 0f; var hh = 0f   // 圆角矩形半宽/半高
         var control = false
+        /** 无键帽（Gboard Wear 式透明字母键 / ⇧ / ⌫）：平时只画内容不画底 */
+        var noFill = false
         /** Material Icons 矢量资源 id（非 0 时绘制图标而非文字） */
         var iconRes: Int = 0
     }
@@ -130,7 +134,7 @@ class RoundKeyboardView @JvmOverloads constructor(
 
     init {
         textPaint.color = COLOR_TEXT
-        textPaint.typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+        textPaint.typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.NORMAL)
         textPaint.textAlign = Paint.Align.CENTER
         trailPaint.color = COLOR_ACCENT
         trailPaint.style = Paint.Style.STROKE
@@ -174,36 +178,32 @@ class RoundKeyboardView @JvmOverloads constructor(
         val R = safeRadius(size)
 
         val candMode = buf.isNotEmpty() && candidates.isNotEmpty()
+        val s = SettingsStore.keyScale(context)
 
-        // Gboard for Wear OS 式紧凑填满布局：
-        // 四行（3 字母行 + 控制行）行距统一 0.25R 紧凑堆叠，纵向撑满圆盘中带；
-        // 键帽近方形略高（宽:高 ≈ 0.87:1），行间隙仅键高的 1/2.4。
-        val dTop = 0.42f * R
+        // Gboard Wear 真机版式（对照实机截图）：
+        //  - 顶部工具条：‹ 切换输入法 / ?123 符号 / ↵ 回车 / ✕ 收起（蓝圆），
+        //    组合输入时该位置替换为候选词条；
+        //  - 三行小写字母键：**无键帽**，纯白文字直接印在黑底上；
+        //  - 底排：⇧（描边箭头）/ 宽空格胶囊 / ⌫（描边图标）。
+        val dTop = 0.30f * R
         val chordTop = sqrt(max(0f, R * R - dTop * dTop))
-        // 全局按键缩放（设置页 小/标准/大）
-        val unit = 2f * chordTop * ROW_SPAN / 10f * SettingsStore.keyScale(context)
+        val unit = 2f * chordTop * ROW_SPAN / 10f * s
 
-        if (!symbols) {
-            if (candMode) {
-                addCandidateRow(-0.56f, cx, cy, R)
-                addRow(ROW0, -0.38f, cx, cy, R, unit)
-                addRow(ROW1, -0.13f, cx, cy, R, unit)
-                addBottomRow(0.12f, cx, cy, R, unit)
-            } else {
-                addRow(ROW0, -0.42f, cx, cy, R, unit)
-                addRow(ROW1, -0.17f, cx, cy, R, unit)
-                addBottomRow(0.08f, cx, cy, R, unit)
-            }
-            addControls(cx, cy, R)
+        if (candMode) {
+            addCandidateRow(-0.60f, cx, cy, R)
         } else {
-            addRow(SYM0, -0.42f, cx, cy, R, unit)
-            addRow(SYM1, -0.17f, cx, cy, R, unit)
-            val bottom = mutableListOf("ABC")
-            bottom.addAll(SYM2)
-            bottom.add("DEL")
-            addRow(bottom, 0.08f, cx, cy, R, unit)
-            addControls(cx, cy, R)
+            addToolbar(-0.60f, cx, cy, R, s)
         }
+        if (!symbols) {
+            addRow(ROW0, -0.30f, cx, cy, R, unit)
+            addRow(ROW1, -0.02f, cx, cy, R, unit)
+            addRow(ROW2, 0.26f, cx, cy, R, unit)
+        } else {
+            addRow(SYM0, -0.30f, cx, cy, R, unit)
+            addRow(SYM1, -0.02f, cx, cy, R, unit)
+            addRow(SYM2, 0.26f, cx, cy, R, unit)
+        }
+        addBottomRow(0.54f, cx, cy, R, s)
 
         clampToSafeCircle(cx, cy, R)
         rebuildDecoder()
@@ -228,23 +228,42 @@ class RoundKeyboardView @JvmOverloads constructor(
         decoder = d
     }
 
-    /** 底排：⇧ + Z..M + ⌫（shift/退格与字母同行等宽，Gboard 式） */
-    private fun addBottomRow(y0f: Float, cx: Float, cy: Float, R: Float, unit: Float) {
-        val bottom = mutableListOf("SHIFT")
-        bottom.addAll(ROW2)
-        bottom.add("DEL")
-        addRow(bottom, y0f, cx, cy, R, unit)
+    /** 顶部工具条：‹ 切换输入法 / ?123 符号 / ↵ 回车 / ✕ 收起（Gboard Wear 式） */
+    private fun addToolbar(y0f: Float, cx: Float, cy: Float, R: Float, s: Float) {
+        val y = cy + y0f * R
+        val hw = 0.105f * R * s
+        val hh = 0.088f * R * s
+        addKey("‹", null, ACTION_IME_PICKER, cx - 0.42f * R, y, hw, hh, true).apply {
+            iconRes = AppR.drawable.ic_chevron_left
+        }
+        addKey(if (symbols) "ABC" else "?123", null, ACTION_MODE, cx - 0.15f * R, y, hw, hh, true)
+        addKey("↵", null, ACTION_ENTER, cx + 0.15f * R, y, hw, hh, true).apply {
+            iconRes = AppR.drawable.ic_return
+        }
+        addKey("✕", null, ACTION_HIDE, cx + 0.42f * R, y, hw, hh, true).apply {
+            iconRes = AppR.drawable.ic_close
+        }
     }
 
-    /** 底部控制行：123 / 宽空格 / ⏎，紧跟字母区（Gboard Wear 式大空格） */
-    private fun addControls(cx: Float, cy: Float, R: Float) {
-        val s = SettingsStore.keyScale(context)   // 控制键随全局按键缩放
-        addKey("123", null, ACTION_MODE, cx - 0.52f * R, cy + 0.40f * R, 0.130f * R * s, 0.115f * R * s, true)
-        addKey("␣", " ", -1, cx, cy + 0.40f * R, 0.360f * R * s, 0.125f * R * s, true).apply {
+    /** 底排：⇧（或 ABC） / 宽空格胶囊 / ⌫ —— Gboard Wear 式三键底排 */
+    private fun addBottomRow(y0f: Float, cx: Float, cy: Float, R: Float, s: Float) {
+        val y = cy + y0f * R
+        val hw = 0.115f * R * s
+        val hh = 0.098f * R * s
+        if (symbols) {
+            addKey("ABC", null, ACTION_MODE, cx - 0.40f * R, y, hw, hh, true)
+        } else {
+            addKey("⇧", null, ACTION_SHIFT, cx - 0.40f * R, y, hw, hh, true).apply {
+                noFill = true
+                iconRes = AppR.drawable.ic_capslock
+            }
+        }
+        addKey("␣", " ", -1, cx, y, 0.26f * R * s, 0.105f * R * s, true).apply {
             iconRes = AppR.drawable.ic_space
         }
-        addKey("⏎", null, ACTION_ENTER, cx + 0.52f * R, cy + 0.40f * R, 0.130f * R * s, 0.115f * R * s, true).apply {
-            iconRes = AppR.drawable.ic_return
+        addKey("⌫", null, ACTION_DELETE, cx + 0.40f * R, y, hw, hh, true).apply {
+            noFill = true
+            iconRes = AppR.drawable.ic_backspace
         }
     }
 
@@ -258,22 +277,17 @@ class RoundKeyboardView @JvmOverloads constructor(
         val n = items.size
         if (n == 0 || unit <= 0f) return
 
-        val hw = unit * 0.48f          // 键帽半宽（步距的 96%，键间隙仅 4% 步距）
-        val hh = unit * 0.55f          // 键帽半高（近方形略高，Gboard Wear 式饱满键帽）
+        val hw = unit * 0.48f          // 命中区半宽（步距的 96%）
+        val hh = unit * 0.55f          // 命中区半高
 
         for ((i, s) in items.withIndex()) {
             val x = cx + (i - (n - 1) / 2f) * unit
 
             when (s) {
-                "SHIFT" -> addKey("⇧", null, ACTION_SHIFT, x, y0, hw, hh, true).apply {
-                    iconRes = AppR.drawable.ic_capslock
-                }
-                "DEL" -> addKey("⌫", null, ACTION_DELETE, x, y0, hw, hh, true).apply {
-                    iconRes = AppR.drawable.ic_backspace
-                }
                 "ABC", "123" -> addKey(s, null, ACTION_MODE, x, y0, hw, hh, true)
                 else -> {
-                    addKey(s, s.lowercase(), -1, x, y0, hw, hh, false)
+                    // 字母/符号键：小写显示（Gboard Wear 式），shift 时经绘制层转大写
+                    addKey(s.lowercase(), s.lowercase(), -1, x, y0, hw, hh, false)
                 }
             }
         }
@@ -424,19 +438,25 @@ class RoundKeyboardView @JvmOverloads constructor(
                 k === pressed -> fill = COLOR_PRESSED
                 k.candIndex == 0 -> { fill = COLOR_ACCENT; txt = COLOR_TEXT_DARK }  // 首选候选
                 k.candIndex > 0 -> fill = COLOR_KEY_CTL
-                k.action == ACTION_ENTER -> { fill = COLOR_ACCENT; txt = COLOR_TEXT_DARK }
+                k.action == ACTION_HIDE -> { fill = COLOR_ACCENT; txt = Color.WHITE }  // ✕ 蓝圆
+                k.action == ACTION_ENTER -> { fill = COLOR_KEY_CTL }
                 k.action == ACTION_SHIFT && (shift || capsLock) ->
                     { fill = COLOR_ACCENT; txt = COLOR_TEXT_DARK }
                 k.action == ACTION_MODE && symbols ->
                     { fill = COLOR_ACCENT; txt = COLOR_TEXT_DARK }
-                k.text == " " -> fill = COLOR_KEY_SPACE
+                k.text == " " -> fill = COLOR_KEY_CTL
                 k.control -> fill = COLOR_KEY_CTL
                 else -> fill = COLOR_KEY
             }
-            keyPaint.color = fill
-            val corner = if (k.text == " ") k.hh else k.hh * 0.62f
-            rectF.set(k.x - k.hw, k.y - k.hh, k.x + k.hw, k.y + k.hh)
-            canvas.drawRoundRect(rectF, corner, corner, keyPaint)
+            // 无键帽键（字母 / ⇧ / ⌫）：平时不画底，按下或激活时才高亮
+            val bare = k.noFill && k !== pressed &&
+                !(k.action == ACTION_SHIFT && (shift || capsLock))
+            if (!bare) {
+                keyPaint.color = fill
+                val corner = if (k.text == " ") k.hh else k.hh * 0.62f
+                rectF.set(k.x - k.hw, k.y - k.hh, k.x + k.hw, k.y + k.hh)
+                canvas.drawRoundRect(rectF, corner, corner, keyPaint)
+            }
 
             // 图标键（Material Icons 矢量）：空格键有组合串时仍显示文字
             val showIcon = k.iconRes != 0 && !(k.text == " " && buf.isNotEmpty())
@@ -468,7 +488,7 @@ class RoundKeyboardView @JvmOverloads constructor(
                 label = label.uppercase()
             }
 
-            var size = k.hh * (if (k.control) 1.5f else 1.7f)
+            var size = k.hh * (if (k.control) 1.2f else 0.95f)
             if (label.length > 2) {
                 val fit = k.hw * 1.8f / (0.60f * label.length)
                 size = min(size, fit)
@@ -597,6 +617,8 @@ class RoundKeyboardView @JvmOverloads constructor(
                 relayout()
             }
             k.action == ACTION_DELETE -> handleDelete()
+            k.action == ACTION_IME_PICKER || k.action == ACTION_HIDE ->
+                keyListener?.onAction(k.action)
             k.action == ACTION_ENTER -> {
                 // 回车：先上屏未提交的组合串（若有），再换行
                 if (buf.isNotEmpty()) {

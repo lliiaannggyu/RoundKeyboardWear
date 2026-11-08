@@ -54,6 +54,11 @@ class RoundIME : InputMethodService(), RoundKeyboardView.KeyListener {
                 ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER))
                 ic.sendKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER))
             }
+            RoundKeyboardView.ACTION_IME_PICKER -> {
+                val imm = getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
+                imm.showInputMethodPicker()
+            }
+            RoundKeyboardView.ACTION_HIDE -> requestHideSelf(0)
         }
     }
 }

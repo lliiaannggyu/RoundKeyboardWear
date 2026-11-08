@@ -5,40 +5,28 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 
 /**
- * 全局设置：图标缩放 / 按键震动。
- * SharedPreferences 持久化 + 内存缓存（键盘绘制/震动高频读取，避免每次读盘）。
+ * 全局设置（连续数值，滑块调节）：
+ *  - 按键大小 keyScale（0.8~1.2，字母/功能/候选键整体缩放）
+ *  - 图标大小 iconScale（0.6~1.6，功能键图标缩放）
+ *  - 按键震动 hapticAmp（0~255，0=关）
+ * SharedPreferences 持久化 + 内存缓存（键盘绘制/震动高频读取）。
  */
 object SettingsStore {
     private const val PREFS = "settings"
     private const val KEY_ICON = "icon_scale"
-    private const val KEY_HAPTIC = "haptic_mode"
     private const val KEY_KEY_SCALE = "key_scale"
+    private const val KEY_HAPTIC = "haptic_amp"
 
-    /** 震动档位 */
-    const val HAPTIC_OFF = 0
-    const val HAPTIC_WEAK = 1
-    const val HAPTIC_MEDIUM = 2
-    const val HAPTIC_STRONG = 3
+    const val KEY_SCALE_MIN = 0.8f
+    const val KEY_SCALE_MAX = 1.2f
+    const val ICON_SCALE_MIN = 0.6f
+    const val ICON_SCALE_MAX = 1.6f
+    const val HAPTIC_MAX = 255f
 
     private var iconScaleCache = Float.NaN
-    private var hapticCache = -1
     private var keyScaleCache = Float.NaN
+    private var hapticCache = Float.NaN
 
-    /** 按键大小全局缩放（字母键/功能键整体，1.0 = 标准） */
-    fun keyScale(ctx: Context): Float {
-        if (!keyScaleCache.isNaN()) return keyScaleCache
-        val v = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getFloat(KEY_KEY_SCALE, 1.0f)
-        keyScaleCache = v
-        return v
-    }
-
-    fun setKeyScale(ctx: Context, value: Float) {
-        keyScaleCache = value
-        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putFloat(KEY_KEY_SCALE, value).apply()
-    }
-
-    /** 功能键图标全局缩放（1.0 = 标准） */
     fun iconScale(ctx: Context): Float {
         if (!iconScaleCache.isNaN()) return iconScaleCache
         val v = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getFloat(KEY_ICON, 1.0f)
@@ -52,36 +40,44 @@ object SettingsStore {
             .edit().putFloat(KEY_ICON, value).apply()
     }
 
-    fun hapticMode(ctx: Context): Int {
-        if (hapticCache >= 0) return hapticCache
-        val v = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getInt(KEY_HAPTIC, HAPTIC_MEDIUM)
+    fun keyScale(ctx: Context): Float {
+        if (!keyScaleCache.isNaN()) return keyScaleCache
+        val v = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getFloat(KEY_KEY_SCALE, 1.0f)
+        keyScaleCache = v
+        return v
+    }
+
+    fun setKeyScale(ctx: Context, value: Float) {
+        keyScaleCache = value
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putFloat(KEY_KEY_SCALE, value).apply()
+    }
+
+    /** 震动振幅 0~255，0 = 关闭 */
+    fun hapticAmp(ctx: Context): Float {
+        if (!hapticCache.isNaN()) return hapticCache
+        val v = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getFloat(KEY_HAPTIC, 140f)
         hapticCache = v
         return v
     }
 
-    fun setHapticMode(ctx: Context, mode: Int) {
-        hapticCache = mode
+    fun setHapticAmp(ctx: Context, value: Float) {
+        hapticCache = value
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putInt(KEY_HAPTIC, mode).apply()
+            .edit().putFloat(KEY_HAPTIC, value).apply()
     }
 
     /**
-     * 按当前档位执行一次按键震动。
-     * @param strong 强提示（滑行解码无命中等），固定用最强档
+     * 按当前振幅执行一次按键震动（振幅越大震动越强、略久）。
+     * @param strong 强提示（滑行无命中等），固定最强档
      */
     fun keyVibrate(ctx: Context, strong: Boolean = false) {
-        val mode = if (strong) HAPTIC_STRONG else hapticMode(ctx)
-        if (mode == HAPTIC_OFF) return
+        val ampF = if (strong) HAPTIC_MAX else hapticAmp(ctx)
+        if (ampF <= 0f) return
         val v = ctx.getSystemService(Vibrator::class.java) ?: return
         if (!v.hasVibrator()) return
-        val ms: Long
-        val amp: Int
-        when (mode) {
-            HAPTIC_WEAK -> { ms = 12L; amp = 64 }
-            HAPTIC_STRONG -> { ms = 28L; amp = 255 }
-            else -> { ms = 18L; amp = 140 }   // HAPTIC_MEDIUM
-        }
+        val amp = ampF.toInt().coerceIn(1, 255)
+        val ms = (12L + (ampF / HAPTIC_MAX * 22f)).toLong()
         v.vibrate(VibrationEffect.createOneShot(ms, amp))
     }
 }

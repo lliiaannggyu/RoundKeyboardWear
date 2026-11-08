@@ -1,0 +1,7 @@
+<!-- Material Symbols: chevron_left（工具条 ‹ 切换输入法）Apache-2.0 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="960" android:viewportHeight="960">
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M564,720 L324,480 L564,240 L620,296 L436,480 L620,664 L564,720 Z"/>
+</vector>

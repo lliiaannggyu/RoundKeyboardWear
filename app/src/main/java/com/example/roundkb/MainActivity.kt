@@ -10,6 +10,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -17,11 +18,19 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
@@ -30,32 +39,26 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.material3.Button
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.FilterChipDefaults
-import androidx.compose.material3.Icon
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
-import androidx.compose.ui.res.painterResource
 import java.io.InputStream
+import java.util.Locale
+import kotlin.math.roundToInt
 
 /**
  * 安装引导 + 词库与全局设置页 —— Wear Compose **Material 3** 实现。
  *
  * UI 结构（圆屏自适应，可滚动）：
  *  - 标题 + 词库状态
- *  - 「图标大小」小 / 标准 / 大（全局功能键图标缩放，键盘即时生效）
- *  - 「按键震动」关 / 弱 / 中 / 强（自定义时长与振幅）
+ *  - **实时预览条**：Q W E + 退格图标，随「按键大小」「图标大小」滑块即时缩放
+ *  - 「按键大小」「图标大小」「按键震动」三个连续滑块，旁边显示当前数值
+ *    （震动滑块松手试震一次）
  *  - 「去开启输入法」「导入词库」「清空词库」
- *
- * 键盘本体（RoundKeyboardView）保持自绘 View：输入法需要极低延迟与
- * 完全受控的圆屏触控，这也是 Gboard 等主流输入法的做法。
  */
 class MainActivity : ComponentActivity() {
 
@@ -86,9 +89,9 @@ private fun RoundKbScreen(stats: MutableState<String>, onRefresh: () -> Unit) {
     val context = LocalContext.current
     val activity = context as? ComponentActivity
 
-    var iconScale by remember { mutableStateOf(SettingsStore.iconScale(context)) }
-    var haptic by remember { mutableStateOf(SettingsStore.hapticMode(context)) }
     var keyScale by remember { mutableStateOf(SettingsStore.keyScale(context)) }
+    var iconScale by remember { mutableStateOf(SettingsStore.iconScale(context)) }
+    var hapticAmp by remember { mutableStateOf(SettingsStore.hapticAmp(context)) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null && activity != null) {
@@ -97,12 +100,12 @@ private fun RoundKbScreen(stats: MutableState<String>, onRefresh: () -> Unit) {
     }
 
     Box(
-        modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+        modifier = Modifier.fillMaxSize().padding(horizontal = 14.dp),
         contentAlignment = Alignment.Center
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
             modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
         ) {
             Text(
@@ -115,55 +118,50 @@ private fun RoundKbScreen(stats: MutableState<String>, onRefresh: () -> Unit) {
                 text = stats.value,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 10.sp,
-                lineHeight = 14.sp,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(bottom = 2.dp)
+                lineHeight = 13.sp,
+                textAlign = TextAlign.Center
+            )
+
+            // ---- 实时预览：随滑块即时缩放 ----
+            KeyboardPreview(keyScale, iconScale)
+
+            // ---- 按键大小 ----
+            SliderRow(
+                label = "按键大小",
+                valueText = String.format(Locale.US, "%.2f×", keyScale),
+                value = keyScale,
+                range = SettingsStore.KEY_SCALE_MIN..SettingsStore.KEY_SCALE_MAX,
+                onChange = {
+                    keyScale = it
+                    SettingsStore.setKeyScale(context, it)
+                }
             )
 
             // ---- 图标大小 ----
-            SettingLabel("图标大小")
-            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                ChoiceChip("小", iconScale == 0.80f) {
-                    SettingsStore.setIconScale(context, 0.80f); iconScale = 0.80f
+            SliderRow(
+                label = "图标大小",
+                valueText = String.format(Locale.US, "%.2f×", iconScale),
+                value = iconScale,
+                range = SettingsStore.ICON_SCALE_MIN..SettingsStore.ICON_SCALE_MAX,
+                onChange = {
+                    iconScale = it
+                    SettingsStore.setIconScale(context, it)
                 }
-                ChoiceChip("标准", iconScale == 1.0f) {
-                    SettingsStore.setIconScale(context, 1.0f); iconScale = 1.0f
-                }
-                ChoiceChip("大", iconScale == 1.25f) {
-                    SettingsStore.setIconScale(context, 1.25f); iconScale = 1.25f
-                }
-            }
+            )
 
-            // ---- 按键大小 ----
-            SettingLabel("按键大小")
-            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                ChoiceChip("小", keyScale == 0.90f) {
-                    SettingsStore.setKeyScale(context, 0.90f); keyScale = 0.90f
-                }
-                ChoiceChip("标准", keyScale == 1.0f) {
-                    SettingsStore.setKeyScale(context, 1.0f); keyScale = 1.0f
-                }
-                ChoiceChip("大", keyScale == 1.10f) {
-                    SettingsStore.setKeyScale(context, 1.10f); keyScale = 1.10f
-                }
-            }
-
-            // ---- 按键震动 ----
-            SettingLabel("按键震动")
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                ChoiceChip("关", haptic == SettingsStore.HAPTIC_OFF) {
-                    SettingsStore.setHapticMode(context, SettingsStore.HAPTIC_OFF); haptic = SettingsStore.HAPTIC_OFF
-                }
-                ChoiceChip("弱", haptic == SettingsStore.HAPTIC_WEAK) {
-                    SettingsStore.setHapticMode(context, SettingsStore.HAPTIC_WEAK); haptic = SettingsStore.HAPTIC_WEAK
-                }
-                ChoiceChip("中", haptic == SettingsStore.HAPTIC_MEDIUM) {
-                    SettingsStore.setHapticMode(context, SettingsStore.HAPTIC_MEDIUM); haptic = SettingsStore.HAPTIC_MEDIUM
-                }
-                ChoiceChip("强", haptic == SettingsStore.HAPTIC_STRONG) {
-                    SettingsStore.setHapticMode(context, SettingsStore.HAPTIC_STRONG); haptic = SettingsStore.HAPTIC_STRONG
-                }
-            }
+            // ---- 按键震动（0 = 关；松手试震一次） ----
+            SliderRow(
+                label = "按键震动",
+                valueText = if (hapticAmp <= 0f) "关"
+                    else "${(hapticAmp / SettingsStore.HAPTIC_MAX * 100).roundToInt()}%",
+                value = hapticAmp,
+                range = 0f..SettingsStore.HAPTIC_MAX,
+                onChange = {
+                    hapticAmp = it
+                    SettingsStore.setHapticAmp(context, it)
+                },
+                onFinished = { SettingsStore.keyVibrate(context) }   // 松手试震
+            )
 
             M3Button("去开启输入法", R.drawable.ic_settings) {
                 activity?.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
@@ -178,36 +176,99 @@ private fun RoundKbScreen(stats: MutableState<String>, onRefresh: () -> Unit) {
             }
 
             Text(
-                text = "滑过字母=整词输入 · 点按=逐字母\n词库为 UTF-8 文本，导入即生效",
+                text = "滑过字母=整词输入 · 点按=逐字母\n设置在下次呼出键盘时生效",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 9.sp,
-                lineHeight = 13.sp,
+                lineHeight = 12.sp,
                 textAlign = TextAlign.Center
             )
         }
     }
 }
 
+/** 迷你键盘预览条：三个字母键 + 一个退格功能键，实时反映按键/图标缩放 */
 @Composable
-private fun SettingLabel(text: String) {
-    Text(
-        text = text,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Medium
-    )
+private fun KeyboardPreview(keyScale: Float, iconScale: Float) {
+    val keyW = 30 * keyScale
+    val keyH = 26 * keyScale
+    val corner = (7 * keyScale).dp
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(vertical = 2.dp)
+    ) {
+        listOf("Q", "W", "E").forEach { ch ->
+            Box(
+                modifier = Modifier
+                    .width(keyW.dp).height(keyH.dp)
+                    .background(Color(0xFF313338), RoundedCornerShape(corner)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = ch,
+                    color = Color.White,
+                    fontSize = (13 * keyScale).sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+        Box(
+            modifier = Modifier
+                .width(keyW.dp).height(keyH.dp)
+                .background(Color(0xFF3C4043), RoundedCornerShape(corner)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                painter = painterResource(R.drawable.ic_backspace),
+                contentDescription = null,
+                modifier = Modifier.size((11 * keyScale * iconScale).dp),
+                tint = Color.White
+            )
+        }
+    }
 }
 
-/** M3 筛选芯片：设置项单选 */
-@OptIn(ExperimentalMaterial3Api::class)
+/** 标签 + 当前数值 + 连续滑块 */
 @Composable
-private fun ChoiceChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    FilterChip(
-        selected = selected,
-        onClick = onClick,
-        label = { Text(text = label, fontSize = 11.sp) },
-        colors = FilterChipDefaults.filterChipColors()
-    )
+private fun SliderRow(
+    label: String,
+    valueText: String,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    onChange: (Float) -> Unit,
+    onFinished: (() -> Unit)? = null
+) {
+    Column(modifier = Modifier.fillMaxWidth(0.94f)) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = label,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium
+            )
+            Text(
+                text = valueText,
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+        Slider(
+            value = value.coerceIn(range.start, range.endInclusive),
+            onValueChange = onChange,
+            onValueChangeFinished = onFinished,
+            valueRange = range,
+            colors = SliderDefaults.colors(
+                thumbColor = MaterialTheme.colorScheme.primary,
+                activeTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+            ),
+            modifier = Modifier.fillMaxWidth().height(22.dp)
+        )
+    }
 }
 
 /** 导入词库文件，返回结果信息（成功=词库状态，失败=错误描述） */
