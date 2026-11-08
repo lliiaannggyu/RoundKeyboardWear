@@ -59,8 +59,8 @@ class RoundKeyboardView @JvmOverloads constructor(
         private const val HIT_SLOP_MUL = 1.15f       // 触点容错
         private const val HIT_SLOP_ADD = 8f
         private const val GESTURE_START = 0.30f      // 起点位移 > 0.30R 进入滑行
-        private const val GESTURE_MIN_PATH = 0.85f   // 轨迹最短长度（相对安全半径）
-        private const val GESTURE_SAMPLES = 24       // 轨迹/理想路径重采样数
+        private const val GESTURE_MIN_PATH = 0.40f   // 轨迹最短长度（相对安全半径，短词也要能滑）
+        private const val MAX_CANDIDATES = 3         // 滑行候选数
 
         // ---- Gboard 深色配色 ----
         private const val COLOR_BG = 0xF2101113.toInt()
@@ -94,7 +94,6 @@ class RoundKeyboardView @JvmOverloads constructor(
     }
 
     private val keys = mutableListOf<Key>()
-    private val letterPos = HashMap<Char, FloatArray>()   // 滑行匹配用
 
     private val keyPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -117,6 +116,8 @@ class RoundKeyboardView @JvmOverloads constructor(
     // 滑行手势状态
     private val trace = mutableListOf<FloatArray>()
     private var tracing = false
+    /** 滑行解码器（FlorisBoard / SHARK² 算法，布局变化时重建） */
+    private var decoder: GlideDecoder? = null
 
     private val deleteRepeat = object : Runnable {
         override fun run() {
@@ -160,7 +161,6 @@ class RoundKeyboardView @JvmOverloads constructor(
 
     private fun layoutKeys(w: Float, h: Float) {
         keys.clear()
-        letterPos.clear()
         if (w <= 0 || h <= 0) return
 
         val size = min(w, h)
@@ -193,6 +193,26 @@ class RoundKeyboardView @JvmOverloads constructor(
         }
 
         clampToSafeCircle(cx, cy, R)
+        rebuildDecoder()
+    }
+
+    /**
+     * 重建滑行解码器：只做轻量装配（端点索引在 WordStore 里已建好，
+     * 与布局无关且只建一次），因此候选行出现/消失导致的重排也不会卡顿。
+     */
+    private fun rebuildDecoder() {
+        val letterKeys = ArrayList<GlideKey>(26)
+        val seen = HashSet<Char>(32)
+        for (k in keys) {
+            val t = k.text ?: continue
+            if (k.control || k.candIndex >= 0 || t.length != 1) continue
+            val ch = t[0].lowercaseChar()
+            if (!ch.isLetter() || !seen.add(ch)) continue
+            letterKeys.add(GlideKey(ch, k.x, k.y, k.hw * 2f, k.hh * 2f))
+        }
+        val d = GlideDecoder(store.endpointIndex(), letterKeys, store.maxFrequency)
+        d.setMinPointDistance((letterKeys.firstOrNull()?.w?.div(4f)) ?: 12f)
+        decoder = d
     }
 
     /** 底排：⇧ + Z..M + ⌫（shift/退格与字母同行，Gboard 式） */
@@ -234,7 +254,6 @@ class RoundKeyboardView @JvmOverloads constructor(
                 "ABC", "123" -> addKey(s, null, ACTION_MODE, x, y0, keyR, keyR, true)
                 else -> {
                     addKey(s, s.lowercase(), -1, x, y0, keyR, keyR, false)
-                    letterPos[s.lowercase()[0]] = floatArrayOf(x, y0)
                 }
             }
         }
@@ -338,171 +357,28 @@ class RoundKeyboardView @JvmOverloads constructor(
         return len
     }
 
-    /** 折线等弧长重采样为 n 个点 */
-    private fun resample(pts: List<FloatArray>, n: Int): Array<FloatArray>? {
-        if (pts.size < 2) return null
-        val total = pathLength(pts)
-        if (total <= 0f) return null
-        val out = Array(n) { FloatArray(2) }
-        val stepLen = total / (n - 1)
-        var acc = 0f
-        var seg = 0
-        out[0][0] = pts[0][0]
-        out[0][1] = pts[0][1]
-        for (i in 1 until n) {
-            val target = stepLen * i
-            while (seg < pts.size - 2 && acc + dist(pts[seg], pts[seg + 1]) < target) {
-                acc += dist(pts[seg], pts[seg + 1])
-                seg++
-            }
-            val segLen = dist(pts[seg], pts[seg + 1])
-            val f = if (segLen <= 0f) 0f else (target - acc) / segLen
-            val a = pts[seg]
-            val b = pts[seg + 1]
-            out[i][0] = a[0] + (b[0] - a[0]) * f
-            out[i][1] = a[1] + (b[1] - a[1]) * f
-        }
-        return out
-    }
-
-    /** 轨迹 → 字母序列（相邻去重，仅字母键） */
-    private fun traceToSequence(): List<String> {
-        val seq = mutableListOf<String>()
-        var last: String? = null
-        for (pt in trace) {
-            var best: Key? = null
-            var bestD = Float.MAX_VALUE
-            for (k in keys) {
-                val t = k.text
-                if (t == null || k.control || k.candIndex >= 0 ||
-                    t.length != 1 || !t[0].isLetter()) continue
-                val dx = max(abs(pt[0] - k.x) - k.hw, 0f)
-                val dy = max(abs(pt[1] - k.y) - k.hh, 0f)
-                val d = hypot(dx, dy)
-                if (d < bestD) { bestD = d; best = k }
-            }
-            val b = best
-            if (b != null && bestD < b.hh * 2.2f) {
-                val ch = b.text!!
-                if (ch != last) { seq.add(ch); last = ch }
-            }
-        }
-        return seq
-    }
-
-    /** 手势匹配：首尾字母过滤 + 理想路径与轨迹的贴合度打分 */
-    private fun gestureCandidates(seq: List<String>): List<String> {
-        val out = mutableListOf<String>()
-        if (seq.size < 2 || !store.hasDictionary) return out
-
-        val ts = resample(trace, GESTURE_SAMPLES) ?: return out
-        val traceLen = pathLength(trace)
-        val R = safeRadius(min(width, height).toFloat())
-        val seqStr = seq.joinToString("")
-        val words = store.gestureFilter(seq.first(), seq.last(), 6000)
-
-        // 综合打分：双向 Chamfer（路径贴合 + 蜿蜒惩罚）+ 字母必经性 + 长度差 - 词频加成
-        data class Scored(val value: String, val cost: Float, val freq: Int)
-        val scored = mutableListOf<Scored>()
-        for (gw in words) {
-            // 词字母序列必须是轨迹字母序列的子序列（允许路过别的键，但顺序不能乱）
-            if (!isSubsequence(gw.key, seqStr)) continue
-
-            // 理想路径：词的键心折线（相邻去重）
-            val ideal = mutableListOf<FloatArray>()
-            var prev: FloatArray? = null
-            var ok = true
-            for (ch in gw.key) {
-                val c = letterPos[ch]
-                if (c == null) { ok = false; break }
-                if (prev == null || dist(prev, c) > 0.01f) ideal.add(c)
-                prev = c
-            }
-            if (!ok || ideal.size < 2) continue
-
-            val isamp = resample(ideal, GESTURE_SAMPLES) ?: continue
-
-            // c1：理想路径每点到轨迹的最小距离（覆盖：词的路径要贴着轨迹走）
-            // c2：轨迹每点到理想路径的最小距离（蜿蜒：轨迹别乱跑）
-            var c1 = 0f
-            var c2 = 0f
-            for (i in 0 until GESTURE_SAMPLES) {
-                var b1 = Float.MAX_VALUE
-                var b2 = Float.MAX_VALUE
-                for (j in 0 until GESTURE_SAMPLES) {
-                    val d1 = dist(isamp[i], ts[j])
-                    if (d1 < b1) b1 = d1
-                    val d2 = dist(ts[i], isamp[j])
-                    if (d2 < b2) b2 = d2
-                }
-                c1 += b1
-                c2 += b2
-            }
-
-            // 必经性：词的每个字母键心都应被轨迹经过（取最小距离均值）
-            var visit = 0f
-            var nLetters = 0
-            var prevCh = ' '
-            for (ch in gw.key) {
-                if (ch == prevCh) continue
-                prevCh = ch
-                val c = letterPos[ch] ?: continue
-                var bd = Float.MAX_VALUE
-                for (t in ts) {
-                    val d = dist(c, t)
-                    if (d < bd) bd = d
-                }
-                visit += bd
-                nLetters++
-            }
-            if (nLetters > 0) visit /= nLetters
-
-            var idealLen = 0f
-            for (i in 1 until ideal.size) idealLen += dist(ideal[i - 1], ideal[i])
-
-            val freqBonus = min(0.10f, 0.03f * kotlin.math.ln(1f + gw.freq))
-            val cost = 0.5f * (c1 + c2) / (GESTURE_SAMPLES * R) +
-                    0.35f * visit / R +
-                    0.15f * abs(idealLen - traceLen) / R -
-                    freqBonus
-            scored.add(Scored(gw.value, cost, gw.freq))
-        }
-        scored.sortWith(compareBy<Scored> { it.cost }.thenByDescending { it.freq })
-        for (s in scored) {
-            if (out.size >= 3) break
-            if (s.cost < 0.50f) out.add(s.value)
-        }
-        return out
-    }
-
-    /** s 是否为 of 的子序列（手势轨迹允许带多余字母，但词字母顺序必须一致） */
-    private fun isSubsequence(s: String, of: String): Boolean {
-        var i = 0
-        for (c in of) {
-            if (i < s.length && s[i] == c) i++
-        }
-        return i == s.length
-    }
-
+    /**
+     * 滑行结束：交给 [GlideDecoder] 出候选。
+     *
+     * 解码走 FlorisBoard / SHARK² 流水线（端点剪枝 → 长度剪枝 → 形状+位置高斯 + 词频），
+     * 不再把轨迹经过的字母序列当作输入内容。无命中时静默结束。
+     */
     private fun finishGesture() {
+        val d = decoder
         val size = min(width, height).toFloat()
-        val minLen = GESTURE_MIN_PATH * safeRadius(size)
-        if (pathLength(trace) < minLen) return
+        if (d == null || d.pathLength() < GESTURE_MIN_PATH * safeRadius(size)) return
 
-        val seq = traceToSequence()
-        if (seq.size < 2) return
-
-        buf.setLength(0)
-        buf.append(seq.joinToString(""))
-        candidates.clear()
-        val cands = gestureCandidates(seq)
-        if (cands.isNotEmpty()) {
-            candidates.addAll(cands)                                   // 手势最优词
-        } else {
-            candidates.addAll(correctAndSuggest(buf.toString(), 3))    // 退化为组合纠错
+        val cands = d.suggest(MAX_CANDIDATES)
+        if (cands.isEmpty()) {
+            performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+            return
         }
+        buf.setLength(0)
+        candidates.clear()
+        candidates.addAll(cands)
         layoutKeys(width.toFloat(), height.toFloat())
         invalidate()
+        performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
     }
 
     // ============================== 绘制 ==============================
@@ -598,6 +474,7 @@ class RoundKeyboardView @JvmOverloads constructor(
                 trace.clear()
                 trace.add(floatArrayOf(x, y))
                 tracing = false
+                decoder?.clear()
                 updatePressed(x, y)
                 if (pressed?.action == ACTION_DELETE) postDelayed(deleteRepeat, 400)
                 return true
@@ -606,7 +483,8 @@ class RoundKeyboardView @JvmOverloads constructor(
                 val last = trace.last()
                 if (tracing) {
                     if (dist(last, floatArrayOf(x, y)) > 4f) trace.add(floatArrayOf(x, y))
-                    pressed = nearestKey(x, y)          // 手势视觉反馈
+                    decoder?.addPoint(x, y)              // 实时喂点（内部按最小点距抽稀）
+                    pressed = nearestKey(x, y)           // 手势视觉反馈
                     invalidate()
                 } else {
                     val size = min(width, height).toFloat()
@@ -615,6 +493,9 @@ class RoundKeyboardView @JvmOverloads constructor(
                         tracing = true                   // 进入滑行模式
                         pressed = null
                         removeCallbacks(deleteRepeat)
+                        decoder?.clear()
+                        decoder?.addPoint(start[0], start[1])
+                        decoder?.addPoint(x, y)
                         performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
                     } else {
                         updatePressed(x, y)

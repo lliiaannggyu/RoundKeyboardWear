@@ -99,6 +99,7 @@ class WordStore private constructor(context: Context) {
         } catch (_: Exception) {
         }
         sorted = list.sortedBy { it.key }
+        endpointIndex = null   // 词库变了，端点索引重建
     }
 
     private fun parseLine(line: String): Entry? {
@@ -149,23 +150,57 @@ class WordStore private constructor(context: Context) {
         return out.toList()
     }
 
-    /** 滑行输入候选词（key 匹配用、value 上屏用、freq 打分用），按 value 去重保留最高词频 */
-    class GestureWord(val key: String, val value: String, val freq: Int)
+    // ==================== 滑行输入：端点索引 ====================
 
-    /** 滑行输入过滤：首字母相同 + 尾字母相同的词（cap 防止超长词库拖慢打分） */
-    fun gestureFilter(first: String, last: String, cap: Int): List<GestureWord> {
-        val out = LinkedHashMap<String, GestureWord>()
-        var i = lowerBound(first)
-        while (i < sorted.size && out.size < cap) {
-            val e = sorted[i]
-            if (!e.key.startsWith(first)) break
-            if (e.key.length >= 2 && e.key.endsWith(last)) {
-                val cur = out[e.value]
-                if (cur == null || cur.freq < e.freq) out[e.value] = GestureWord(e.key, e.value, e.freq)
-            }
-            i++
+    /**
+     * 端点索引：`(首字母 << 16 | 尾字母) → 词`。
+     *
+     * 与键盘布局无关（只依赖 a-z），因此词库变动时构建一次即可，
+     * 布局重排（候选行出现/消失）不会触发重建。构建过程按 value 去重、
+     * 保留最高词频，供 [GlideDecoder] 做端点剪枝。
+     */
+    @Volatile private var endpointIndex: Map<Long, List<GlideWord>>? = null
+    @Volatile private var maxWordFreq: Int = 1
+
+    val maxFrequency: Int
+        get() {
+            ensureEndpointIndex()
+            return maxWordFreq
         }
-        return out.values.toList()
+
+    fun endpointIndex(): Map<Long, List<GlideWord>> {
+        ensureEndpointIndex()
+        return endpointIndex ?: emptyMap()
+    }
+
+    private fun ensureEndpointIndex() {
+        if (endpointIndex != null) return
+        synchronized(this) {
+            if (endpointIndex != null) return
+            val byValue = HashMap<String, GlideWord>(sorted.size)
+            var mf = 1
+            for (e in sorted) {
+                val k = e.key
+                if (k.length < 2 || !isAsciiWord(k)) continue
+                if (e.freq > mf) mf = e.freq
+                val cur = byValue[e.value]
+                if (cur == null || cur.freq < e.freq) {
+                    byValue[e.value] = GlideWord(k, e.value, e.freq)
+                }
+            }
+            val map = HashMap<Long, MutableList<GlideWord>>(Math.max(64, byValue.size / 8))
+            for (w in byValue.values) {
+                val k = GlideDecoder.pairKey(w.key[0], w.key[w.key.length - 1])
+                map.getOrPut(k) { ArrayList(16) }.add(w)
+            }
+            maxWordFreq = mf
+            endpointIndex = map
+        }
+    }
+
+    private fun isAsciiWord(s: String): Boolean {
+        for (c in s) if (c < 'a' || c > 'z') return false
+        return true
     }
 
     private fun lowerBound(p: String): Int {
