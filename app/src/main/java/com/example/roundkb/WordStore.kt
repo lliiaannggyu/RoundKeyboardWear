@@ -9,16 +9,20 @@ import java.io.InputStream
 import java.io.InputStreamReader
 import java.text.SimpleDateFormat
 import java.util.Date
+import java.text.Normalizer
 import java.util.Locale
 
 /**
  * 自定义词库（应用内可导入 / 更新 / 清空，无需重装应用）。
  *
- * 词库文件格式（UTF-8 文本，每行一条）：
- *  - 单词一行：           hello            → 输入 hel 联想 hello
- *  - 键 值（空格分隔）：   nihao 你好        → 输入 nihao 候选「你好」
- *  - 键 TAB 值 TAB 词频： nihao<TAB>你好<TAB>500
- *  - # 开头为注释
+ * 词库文件格式（UTF-8 文本，每行一条，列序自动识别）：
+ *  - 拼音 词 词频：   nihao<TAB>你好<TAB>500      （本应用标准格式）
+ *  - 词 拼音：        你好<TAB>nihao              （搜狗 txt 导出等）
+ *  - 词 拼音 词频：   你好<TAB>ni hao<TAB>500     （Rime 词典数据行，拼音可含空格）
+ *  - 词 词频 词性：   你好<TAB>500<TAB>r          （jieba 词典——无拼音，自动跳过）
+ *  - 英文词：         hello / hello<TAB>world<TAB>500
+ *  - 拼音带声调自动剥除：ni3 hao3、nǐ hǎo 均可
+ *  - # 开头为注释；Rime dict.yaml 的元数据头自动跳过
  *
  * 匹配规则：按键序列（组合串）对 key 做前缀匹配，按词频优先返回候选值；
  * 滑行输入对 key 做首尾字母过滤后交给路径打分。
@@ -102,30 +106,73 @@ class WordStore private constructor(context: Context) {
         endpointIndex = null   // 词库变了，端点索引重建
     }
 
+    /** 拼音归一化：小写、剥声调符号（nǐ→ni）与音节尾声调数字（ni3→ni），只留字母 */
+    private fun normPinyin(s: String): String {
+        val nfd = Normalizer.normalize(s, Normalizer.Form.NFD)
+        val sb = StringBuilder(nfd.length)
+        for (ch in nfd) {
+            val c = Character.toLowerCase(ch)
+            if (c in 'a'..'z') sb.append(c)
+            // 其余（声调 combining mark、数字、空格）一律丢弃
+        }
+        return sb.toString()
+    }
+
+    private fun isHanCol(s: String): Boolean {
+        for (ch in s) if (ch in '\u4e00'..'\u9fff') return true
+        return false
+    }
+
+    /** 列自动识别解析：兼容本应用格式 / 搜狗 txt / Rime 词典 / jieba 词典 / 英文词表 */
     private fun parseLine(line: String): Entry? {
-        if (line.isEmpty() || line.startsWith("#")) return null
-        val parts = line.split("\t")
+        val t = line.trim()
+        if (t.isEmpty() || t.startsWith("#") || t.startsWith("//")) return null
+        if (t == "---" || t == "...") return null                       // Rime yaml 分隔
+        if (t.contains('\uFFFD')) return null                           // 二进制词库（.scel 等）乱码
+        if (!isHanCol(t) && t.contains(':')) return null                // yaml 元数据 name: xxx
+
+        val cols = t.split(Regex("[\\t ]+")).filter { it.isNotEmpty() }
+        if (cols.isEmpty()) return null
+
+        val pinyinRegex = Regex("^[A-Za-züÜ]+[1-5]?$")
+        val hanCols = mutableListOf<String>()
+        val alphaCols = mutableListOf<String>()     // 出现在首个数字列之前的字母列
+        var freq = 1
+        var seenNum = false
+        for (c in cols) {
+            when {
+                isHanCol(c) -> hanCols.add(c)
+                c.all { it.isDigit() } -> {
+                    val f = c.toIntOrNull()
+                    if (!seenNum && f != null && f > 0) { freq = f; seenNum = true }
+                    // 数字列之后出现的字母列一律视为词性等标注，不再当拼音
+                }
+                // 纯字母列（含带声调的 nǐ / ü 等；normPinyin 统一剥声调）
+                c.all { it.isLetter() } || pinyinRegex.matches(c) ->
+                    if (!seenNum) alphaCols.add(c)
+                // 其它（词性后缀、bin 字段等）忽略
+            }
+        }
+
         var key: String
         var value: String
-        var freq = 1
-        if (parts.size >= 2) {
-            key = parts[0].trim().lowercase(Locale.ROOT)
-            value = parts[1].trim()
-            if (parts.size >= 3) freq = parts[2].trim().toIntOrNull() ?: 1
+        if (hanCols.isNotEmpty()) {
+            value = hanCols.first()
+            key = normPinyin(alphaCols.joinToString(""))   // Rime "ni hao" → "nihao"
+            if (key.isEmpty()) return null                 // 有词无拼音：无法按键检索，跳过
         } else {
-            val ws = line.split(Regex("\\s+"))
-            if (ws.size >= 2) {
-                key = ws[0].lowercase(Locale.ROOT)
-                value = ws[1]
-                if (ws.size >= 3) freq = ws[2].toIntOrNull() ?: 1
-            } else {
-                key = line.lowercase(Locale.ROOT)
-                value = line
+            // 纯英文行：hello → key=value；hello world → key=hello value=world
+            when (alphaCols.size) {
+                1 -> { key = alphaCols[0].lowercase(Locale.ROOT); value = key }
+                in 2..Int.MAX_VALUE -> {
+                    key = alphaCols[0].lowercase(Locale.ROOT)
+                    value = alphaCols[1]
+                }
+                else -> return null
             }
         }
         if (key.isEmpty()) return null
         if (value.isEmpty()) value = key
-        if (freq <= 0) freq = 1
         return Entry(key, value, freq)
     }
 
