@@ -118,7 +118,12 @@ class WordStore private constructor(context: Context) {
     }
 
     private fun isHanCol(s: String): Boolean {
-        for (ch in s) if (ch in '\u4e00'..'\u9fff') return true
+        for (ch in s) {
+            if (ch in '\u4e00'..'\u9fff' ||          // CJK 基本区
+                ch in '\u3400'..'\u4dbf' ||          // 扩展 A 区（㞎 等）
+                ch in '\ud800'..'\udbff'             // 增补平面（𩽾 等生僻字，代理对首字节）
+            ) return true
+        }
         return false
     }
 
