@@ -55,17 +55,16 @@ class WordStore private constructor(context: Context) {
         return "当前词库：${sorted.size} 条 · 来源 ${sourceName.ifEmpty { "自定义" }} · 导入于 $time"
     }
 
-    /** 应用内更新词库：导入即生效（同进程），无需重装应用 */
+    /** 应用内更新词库：导入即生效（同进程），无需重装应用。
+     *  二进制/压缩词库（.scel、zip 包裹的 .dict 等）由 DictConverter 即时转换为内部格式。 */
     fun importFrom(input: InputStream, source: String?) {
-        FileOutputStream(dictFile).use { out ->
-            val buf = ByteArray(8192)
-            while (true) {
-                val n = input.read(buf)
-                if (n <= 0) break
-                out.write(buf, 0, n)
-            }
-        }
+        val raw = input.readBytes()
         try { input.close() } catch (_: Exception) {}
+        val converted = source?.let { DictConverter.convertToText(raw, it) }
+        FileOutputStream(dictFile).use { out ->
+            if (converted != null) out.write(converted.toByteArray(Charsets.UTF_8))
+            else out.write(raw)
+        }
         importTime = System.currentTimeMillis()
         sourceName = source ?: ""
         appContext.getSharedPreferences("dict_meta", 0).edit()
