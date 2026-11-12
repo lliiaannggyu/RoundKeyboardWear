@@ -57,6 +57,9 @@ class RoundKeyboardView @JvmOverloads constructor(
         const val ACTION_SYMPAGE = 8      // =\< 符号翻页
         const val ACTION_LETTER = 9       // ABC 回字母层
         const val ACTION_EMOJI_TAB = 10   // 表情分类页签（candIndex 存分类号）
+        const val ACTION_CAND_PREV = 11   // 候选上一页 ‹
+        const val ACTION_CAND_NEXT = 12   // 候选下一页 ›
+        const val ACTION_ENG = 13         // 中（退出英文模式）
 
         // 键盘模式
         const val MODE_LETTER = 0
@@ -103,6 +106,9 @@ class RoundKeyboardView @JvmOverloads constructor(
 
         /** 行宽占该高度处圆弧弦长的比例（直排下控制左右边距） */
         private const val ROW_SPAN = 0.90f
+        private const val CAND_PER_PAGE = 3   // 候选行每页芯片数
+        private const val CAND_POOL = 9    // 候选池上限（翻页取用）
+        private const val LONG_PRESS_MS = 550L
     }
 
     private class Key {
@@ -119,6 +125,8 @@ class RoundKeyboardView @JvmOverloads constructor(
         var emoji = false
         /** Material Icons 矢量资源 id（非 0 时绘制图标而非文字） */
         var iconRes: Int = 0
+        /** false = 置灰不可点（候选翻页到边界等） */
+        var enabled = true
     }
 
     private val keys = mutableListOf<Key>()
@@ -134,6 +142,18 @@ class RoundKeyboardView @JvmOverloads constructor(
     private var pressed: Key? = null
     private var mode = MODE_LETTER          // 字母 / 符号 / 表情
     private var symPage = 0                 // 符号页（0=?123  1==\<）
+    private var engMode = false             // 英文直输模式（长按 ?123 进入）
+    private var candPage = 0                // 候选翻页
+    private var engLongFired = false
+    private val engLongPress = Runnable {
+        if (pressed?.action == ACTION_MODE && mode == MODE_LETTER && !engMode) {
+            engMode = true
+            engLongFired = true
+            pressed = null
+            SettingsStore.keyVibrate(context, strong = true)
+            relayout()
+        }
+    }
     private var emojiCat = 0                // 表情分类（0=最近）
     private var emojiPage = 0               // 表情分类内页码
     private val recentEmoji = mutableListOf<String>()   // 最近使用的表情（内存）
@@ -273,7 +293,8 @@ class RoundKeyboardView @JvmOverloads constructor(
         addKey("😀", null, ACTION_EMOJI, cx - 0.23f * R, y, hw, hh, true).apply {
             emoji = true
         }
-        addKey(if (mode == MODE_SYMBOL) "ABC" else "?123", null, ACTION_MODE, cx, y, hw, hh, true)
+        addKey(if (engMode) "EN" else if (mode == MODE_SYMBOL) "ABC" else "?123",
+               null, ACTION_MODE, cx, y, hw, hh, true)
         addKey("↵", null, ACTION_ENTER, cx + 0.23f * R, y, hw, hh, true).apply {
             iconRes = AppR.drawable.ic_return
         }
@@ -333,9 +354,13 @@ class RoundKeyboardView @JvmOverloads constructor(
         val hw = 0.115f * R * s
         val hh = 0.098f * R * s
         when (mode) {
-            MODE_LETTER -> addKey("⇧", null, ACTION_SHIFT, cx - 0.40f * R, y, hw, hh, true).apply {
-                noFill = true
-                iconRes = AppR.drawable.ic_capslock
+            MODE_LETTER -> if (engMode) {
+                addKey("中", null, ACTION_ENG, cx - 0.40f * R, y, hw, hh, true)
+            } else {
+                addKey("⇧", null, ACTION_SHIFT, cx - 0.40f * R, y, hw, hh, true).apply {
+                    noFill = true
+                    iconRes = AppR.drawable.ic_capslock
+                }
             }
             MODE_SYMBOL -> addKey(if (symPage == 0) "=\\<" else "?123", null, ACTION_SYMPAGE,
                 cx - 0.40f * R, y, hw, hh, true)
@@ -381,24 +406,41 @@ class RoundKeyboardView @JvmOverloads constructor(
         }
     }
 
-    /** 候选词沿顶部弧排布（1~3 个胶囊芯片） */
+    /** 候选词沿顶部弧排布（每页 3 个胶囊芯片，多页时两侧 ‹ › 翻页） */
     private fun addCandidateRow(y0f: Float, cx: Float, cy: Float, R: Float) {
         if (candidates.isEmpty()) return
         val y = cy + y0f * R
         val s = SettingsStore.keyScale(context)   // 候选胶囊随全局按键缩放
         val hh = 0.085f * R * s
         val spacing = 0.335f * R * s
-        candidates.forEachIndexed { i, text ->
+        val maxPage = (candidates.size + CAND_PER_PAGE - 1) / CAND_PER_PAGE
+        if (candPage >= maxPage) candPage = 0
+        val start = candPage * CAND_PER_PAGE
+        val pageItems = candidates.drop(start).take(CAND_PER_PAGE)
+        pageItems.forEachIndexed { i, text ->
             val k = Key()
             k.label = text
             k.text = text
-            k.candIndex = i
-            k.x = cx + (i - (candidates.size - 1) / 2f) * spacing
+            k.candIndex = i                    // 页内位置；fireKey 换算全局下标
+            k.x = cx + (i - (pageItems.size - 1) / 2f) * spacing
             k.y = y
             k.hw = 0.155f * R * s
             k.hh = hh
             k.control = true
             keys.add(k)
+        }
+        if (maxPage > 1) {
+            val px = spacing + 0.10f * R * s
+            val dim = candPage == 0
+            addKey("‹", null, ACTION_CAND_PREV, cx - px, y,
+                0.052f * R, 0.048f * R, true).apply {
+                noFill = dim; enabled = !dim
+            }
+            val dim2 = candPage >= maxPage - 1
+            addKey("›", null, ACTION_CAND_NEXT, cx + px, y,
+                0.052f * R, 0.048f * R, true).apply {
+                noFill = dim2; enabled = !dim2
+            }
         }
     }
 
@@ -463,14 +505,15 @@ class RoundKeyboardView @JvmOverloads constructor(
 
     private fun updateCandidates() {
         candidates.clear()
+        candPage = 0
         val p = buf.toString()
         if (p.isNotEmpty() && store.hasDictionary) {
-            // 整句拼音优先：连续按键串 → 自动分词组句；不足再补词级前缀候选
-            if (p.length >= 4) candidates.addAll(store.sentence(p, 3))
-            if (candidates.size < 3) {
-                for (w in correctAndSuggest(p, 3 - candidates.size)) {
+            // 整句拼音优先：连续按键串 → 自动分词组句；不足再用词级前缀候选补齐
+            if (p.length >= 4) candidates.addAll(store.sentence(p, 6))
+            if (candidates.size < CAND_POOL) {
+                for (w in correctAndSuggest(p, CAND_POOL - candidates.size)) {
                     if (w !in candidates) candidates.add(w)
-                    if (candidates.size >= 3) break
+                    if (candidates.size >= CAND_POOL) break
                 }
             }
         }
@@ -645,7 +688,7 @@ class RoundKeyboardView @JvmOverloads constructor(
             if (d < bestD) { bestD = d; best = k }
         }
         val b = best
-        return if (b != null && bestD <= b.hh * HIT_SLOP_MUL + HIT_SLOP_ADD) b else null
+        return if (b != null && b.enabled && bestD <= b.hh * HIT_SLOP_MUL + HIT_SLOP_ADD) b else null
     }
 
     private fun updatePressed(x: Float, y: Float) {
@@ -672,6 +715,10 @@ class RoundKeyboardView @JvmOverloads constructor(
                 decoder?.clear()
                 updatePressed(x, y)
                 if (pressed?.action == ACTION_DELETE) postDelayed(deleteRepeat, 400)
+                // 长按 ?123（字母层）：进入英文直输模式
+                if (pressed?.action == ACTION_MODE && mode == MODE_LETTER && !engMode) {
+                    postDelayed(engLongPress, LONG_PRESS_MS)
+                }
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
@@ -684,6 +731,9 @@ class RoundKeyboardView @JvmOverloads constructor(
                 } else {
                     val size = min(width, height).toFloat()
                     val start = trace.first()
+                    if (dist(start, floatArrayOf(x, y)) > 0.12f * safeRadius(size)) {
+                        removeCallbacks(engLongPress)    // 手指移开：取消长按
+                    }
                     if (mode == MODE_EMOJI) {
                         // 表情面板：横滑翻页（不参与滑行打字）
                         val dx = x - start[0]
@@ -714,11 +764,14 @@ class RoundKeyboardView @JvmOverloads constructor(
             }
             MotionEvent.ACTION_UP -> {
                 removeCallbacks(deleteRepeat)
+                removeCallbacks(engLongPress)
+                val longFired = engLongFired
+                engLongFired = false
                 if (emojiSwiped) {
                     // 横滑翻页已完成，不触发点按
                 } else if (tracing) {
                     finishGesture()
-                } else {
+                } else if (!longFired) {
                     pressed?.let { fireKey(it) }
                 }
                 pressed = null
@@ -730,6 +783,8 @@ class RoundKeyboardView @JvmOverloads constructor(
             }
             MotionEvent.ACTION_CANCEL -> {
                 removeCallbacks(deleteRepeat)
+                removeCallbacks(engLongPress)
+                engLongFired = false
                 pressed = null
                 tracing = false
                 emojiSwiped = false
@@ -755,9 +810,12 @@ class RoundKeyboardView @JvmOverloads constructor(
     // ============================== 按键动作 ==============================
 
     private fun fireKey(k: Key) {
-        // 候选词上屏
-        if (k.candIndex >= 0) {
-            k.text?.let { keyListener?.onText(it) }
+        // 候选词上屏（emoji 键也用 candIndex，单独判断）
+        if (k.candIndex >= 0 && !k.emoji) {
+            val global = candPage * CAND_PER_PAGE + k.candIndex
+            val text = candidates.getOrNull(global) ?: k.text ?: return
+            keyListener?.onText(text)
+            if (buf.isNotEmpty()) store.learn(buf.toString(), text)   // 自学习
             resetComposition()
             return
         }
@@ -775,8 +833,33 @@ class RoundKeyboardView @JvmOverloads constructor(
                 invalidate()
             }
             k.action == ACTION_MODE -> {
-                mode = if (mode == MODE_SYMBOL) MODE_LETTER else MODE_SYMBOL
-                symPage = 0
+                if (engMode) {
+                    engMode = false                      // EN 键：切回中文
+                } else {
+                    mode = if (mode == MODE_SYMBOL) MODE_LETTER else MODE_SYMBOL
+                    symPage = 0
+                }
+                relayout()
+            }
+            k.action == ACTION_CAND_PREV -> {
+                if (candPage > 0) {
+                    candPage--
+                    SettingsStore.keyVibrate(context)
+                    layoutKeys(width.toFloat(), height.toFloat())
+                    invalidate()
+                }
+            }
+            k.action == ACTION_CAND_NEXT -> {
+                val maxPage = (candidates.size + CAND_PER_PAGE - 1) / CAND_PER_PAGE
+                if (candPage < maxPage - 1) {
+                    candPage++
+                    SettingsStore.keyVibrate(context)
+                    layoutKeys(width.toFloat(), height.toFloat())
+                    invalidate()
+                }
+            }
+            k.action == ACTION_ENG -> {
+                engMode = false
                 relayout()
             }
             k.action == ACTION_EMOJI -> {
@@ -827,7 +910,7 @@ class RoundKeyboardView @JvmOverloads constructor(
                 val t0 = k.text!!
                 if (t0 == " ") {
                     handleSpace()
-                } else if (mode == MODE_LETTER && store.hasDictionary) {
+                } else if (mode == MODE_LETTER && store.hasDictionary && !engMode) {
                     buf.append(t0)                       // 有词库：字母进入组合串
                     updateCandidates()
                 } else {
@@ -850,6 +933,7 @@ class RoundKeyboardView @JvmOverloads constructor(
         if (buf.isNotEmpty()) {
             val t = if (candidates.isEmpty()) buf.toString() else candidates[0]
             keyListener?.onText(t)
+            if (candidates.isNotEmpty()) store.learn(buf.toString(), t)   // 自学习
             resetComposition()
         }
         keyListener?.onText(" ")
@@ -867,6 +951,7 @@ class RoundKeyboardView @JvmOverloads constructor(
     private fun resetComposition() {
         buf.setLength(0)
         candidates.clear()
+        candPage = 0
         layoutKeys(width.toFloat(), height.toFloat())
         invalidate()
     }

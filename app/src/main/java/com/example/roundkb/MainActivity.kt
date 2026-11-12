@@ -163,6 +163,16 @@ private fun RoundKbScreen(stats: MutableState<String>, onRefresh: () -> Unit) {
                 onFinished = { SettingsStore.keyVibrate(context) }   // 松手试震
             )
 
+            // ---- 模糊音开关（切换后词库索引后台重建） ----
+            var fuzzyOn by remember { mutableStateOf(SettingsStore.fuzzy(context)) }
+            M3Button(if (fuzzyOn) "模糊音：开" else "模糊音：关", R.drawable.ic_settings) {
+                fuzzyOn = !fuzzyOn
+                SettingsStore.setFuzzy(context, fuzzyOn)
+                Thread {
+                    WordStore.get(context).reloadFuzzy()
+                    activity?.runOnUiThread { onRefresh() }
+                }.start()
+            }
             M3Button("去开启输入法", R.drawable.ic_settings) {
                 activity?.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
             }
@@ -176,7 +186,7 @@ private fun RoundKbScreen(stats: MutableState<String>, onRefresh: () -> Unit) {
             }
 
             Text(
-                text = "滑过字母=整词输入 · 点按=逐字母\n设置在下次呼出键盘时生效",
+                text = "整句拼音：直接连打 · 候选行可翻页\n长按 ?123 = 英文直输 · 空格上屏首选并记忆\n滑过字母=整词输入 · 设置在下次呼出键盘时生效",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 9.sp,
                 lineHeight = 12.sp,

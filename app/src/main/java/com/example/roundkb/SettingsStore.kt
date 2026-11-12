@@ -16,6 +16,7 @@ object SettingsStore {
     private const val KEY_ICON = "icon_scale"
     private const val KEY_KEY_SCALE = "key_scale"
     private const val KEY_HAPTIC = "haptic_amp"
+    private const val KEY_FUZZY = "fuzzy_pinyin"
 
     const val KEY_SCALE_MIN = 0.8f
     const val KEY_SCALE_MAX = 1.2f
@@ -65,6 +66,15 @@ object SettingsStore {
         hapticCache = value
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().putFloat(KEY_HAPTIC, value).apply()
+    }
+
+    /** 模糊音（zh/z ch/c sh/s、an/ang en/eng in/ing ian/iang uan/uang），默认开 */
+    fun fuzzy(ctx: Context): Boolean =
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_FUZZY, true)
+
+    fun setFuzzy(ctx: Context, value: Boolean) {
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_FUZZY, value).apply()
     }
 
     /**

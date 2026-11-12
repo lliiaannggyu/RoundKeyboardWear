@@ -31,26 +31,35 @@ import kotlin.math.max
  */
 class WordStore private constructor(context: Context) {
 
-    private class Entry(val key: String, val value: String, val freq: Int)
+    private class Entry(val key: String, val normKey: String, val value: String, val freq: Int)
 
     private val appContext = context.applicationContext
     private val dictFile = File(appContext.filesDir, "custom_dict.txt")
+    private val userFile = File(appContext.filesDir, "user_dict.txt")
 
     @Volatile private var sorted: List<Entry> = emptyList()  // 按 key 升序，前缀二分用
     private var cachedMtime = -1L
     private var sourceName = ""
     private var importTime = 0L
 
-    /** key → 词条 索引（整句解码用），词库加载后延迟构建 */
+    /** key → 词条 索引（整句解码用，键为模糊音归一形），词库加载后延迟构建 */
     @Volatile private var keyIndex: HashMap<String, ArrayList<Entry>>? = null
+    @Volatile private var keyIndexFuzzy: Boolean? = null
 
     private fun ensureKeyIndex(): HashMap<String, ArrayList<Entry>>? {
-        keyIndex?.let { return it }
-        if (sorted.isEmpty()) return null
-        val m = HashMap<String, ArrayList<Entry>>(sorted.size * 2)
-        for (e in sorted) m.getOrPut(e.key) { ArrayList(2) }.add(e)
-        keyIndex = m
-        return m
+        val wantFuzzy = SettingsStore.fuzzy(appContext)
+        val cur = keyIndex
+        if (cur != null && keyIndexFuzzy == wantFuzzy) return cur
+        synchronized(this) {
+            val c2 = keyIndex
+            if (c2 != null && keyIndexFuzzy == wantFuzzy) return c2
+            if (sorted.isEmpty()) return null
+            val m = HashMap<String, ArrayList<Entry>>(sorted.size * 2)
+            for (e in sorted) m.getOrPut(e.normKey) { ArrayList(2) }.add(e)
+            keyIndex = m
+            keyIndexFuzzy = wantFuzzy
+            return m
+        }
     }
 
     init {
@@ -90,6 +99,8 @@ class WordStore private constructor(context: Context) {
 
     fun clear() {
         dictFile.delete()
+        userFile.delete()
+        synchronized(userEntries) { userEntries.clear() }
         appContext.getSharedPreferences("dict_meta", 0).edit().clear().apply()
         sourceName = ""
         importTime = 0L
@@ -101,6 +112,9 @@ class WordStore private constructor(context: Context) {
         val mtime = if (dictFile.exists()) dictFile.lastModified() else -1L
         if (mtime != cachedMtime) load()
     }
+
+    /** 模糊音开关变化后重建索引与归一键（可后台线程调用） */
+    fun reloadFuzzy() = load()
 
     private fun load() {
         cachedMtime = if (dictFile.exists()) dictFile.lastModified() else -1L
@@ -115,9 +129,57 @@ class WordStore private constructor(context: Context) {
             }
         } catch (_: Exception) {
         }
-        sorted = list.sortedBy { it.key }
+        // 合并用户词典（自学习的高频词覆盖主库频次）
+        if (userFile.exists()) {
+            try {
+                BufferedReader(InputStreamReader(userFile.inputStream(), Charsets.UTF_8)).use { br ->
+                    var line = br.readLine()
+                    while (line != null && list.size < MAX_ENTRIES) {
+                        parseLine(line.trim())?.let { e ->
+                            list.removeAll { it.normKey == e.normKey && it.value == e.value }
+                            list.add(e)
+                        }
+                        line = br.readLine()
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }
+        sorted = list.sortedBy { it.normKey }
         keyIndex = null   // 词库变了，整句索引重建
         endpointIndex = null   // 词库变了，端点索引重建
+        // 后台预构建整句索引，避免首次按键卡顿
+        Thread { try { ensureKeyIndex() } catch (_: Exception) {} }.start()
+    }
+
+    // ==================== 用户词典自学习 ====================
+
+    /** 用户上屏过的词（独立文件，导入新词库不丢失），freq 已含加权 */
+    @Volatile private var userEntries = mutableListOf<Entry>()
+
+    /**
+     * 自学习：用户选定某候选后调用，提高该词词频、下次优先出。
+     * 整句上屏同样适用（整句按全拼整体成词，下次同串直接首选）。
+     */
+    fun learn(pinyin: String, text: String) {
+        val p = normPinyin(pinyin)
+        if (p.isEmpty() || text.isEmpty()) return
+        val nk = normFuzzy(p)
+        synchronized(userEntries) {
+            userEntries.removeAll { it.normKey == nk && it.value == text }
+            val base = sorted.firstOrNull { it.normKey == nk && it.value == text }?.freq ?: 0
+            userEntries.add(Entry(nk, nk, text, max(base + 50, 10000)))
+        }
+        Thread {
+            try {
+                synchronized(userEntries) {
+                    userFile.bufferedWriter(Charsets.UTF_8).use { w ->
+                        for (e in userEntries) w.write("${e.normKey}\t${e.value}\t${e.freq}\n")
+                    }
+                }
+            } catch (_: Exception) {
+            }
+        }.start()
     }
 
     /** 拼音归一化：小写、剥声调符号（nǐ→ni）与音节尾声调数字（ni3→ni），只留字母 */
@@ -131,6 +193,17 @@ class WordStore private constructor(context: Context) {
         }
         return sb.toString()
     }
+
+    /** 模糊音归一（可开关）：zh/z ch/c sh/s；ian/iang uan/uang an/ang en/eng in/ing */
+    private fun normFuzzy(s: String): String {
+        if (!SettingsStore.fuzzy(appContext)) return s
+        return s.replace("zh", "z").replace("ch", "c").replace("sh", "s")
+            .replace("iang", "ian").replace("uang", "uan")
+            .replace("ang", "an").replace("eng", "en").replace("ing", "in")
+    }
+
+    private fun makeEntry(key: String, value: String, freq: Int) =
+        Entry(key, normFuzzy(normPinyin(key)), value, freq)
 
     private fun isHanCol(s: String): Boolean {
         for (ch in s) {
@@ -192,18 +265,18 @@ class WordStore private constructor(context: Context) {
         }
         if (key.isEmpty()) return null
         if (value.isEmpty()) value = key
-        return Entry(key, value, freq)
+        return makeEntry(key, value, freq)
     }
 
-    /** 前缀匹配候选：按词频优先、短 key 优先，返回去重后的候选值 */
+    /** 前缀匹配候选：按词频优先、短 key 优先，返回去重后的候选值（支持模糊音） */
     fun prefix(prefix: String, limit: Int): List<String> {
         if (prefix.isEmpty() || sorted.isEmpty()) return emptyList()
-        val p = prefix.lowercase(Locale.ROOT)
+        val p = normFuzzy(normPinyin(prefix))
         val hits = mutableListOf<Entry>()
         var i = lowerBound(p)
         while (i < sorted.size && hits.size < MAX_MATCH_SCAN) {
             val e = sorted[i]
-            if (!e.key.startsWith(p)) break
+            if (!e.normKey.startsWith(p)) break
             hits.add(e)
             i++
         }
@@ -252,7 +325,7 @@ class WordStore private constructor(context: Context) {
                 for (s in group) {
                     if (!p.startsWith(s, pos)) continue
                     acc.append(s)
-                    val entries = idx[acc.toString()]
+                    val entries = idx[normFuzzy(acc.toString())]
                     if (entries != null) {
                         val best = entries.maxByOrNull { it.freq }!!
                         var base = lnFreq(best.freq)
@@ -354,7 +427,7 @@ class WordStore private constructor(context: Context) {
         var hi = sorted.size
         while (lo < hi) {
             val mid = (lo + hi) ushr 1
-            if (sorted[mid].key < p) lo = mid + 1 else hi = mid
+            if (sorted[mid].normKey < p) lo = mid + 1 else hi = mid
         }
         return lo
     }
