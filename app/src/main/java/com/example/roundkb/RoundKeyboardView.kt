@@ -465,7 +465,14 @@ class RoundKeyboardView @JvmOverloads constructor(
         candidates.clear()
         val p = buf.toString()
         if (p.isNotEmpty() && store.hasDictionary) {
-            candidates.addAll(correctAndSuggest(p, 3))
+            // 整句拼音优先：连续按键串 → 自动分词组句；不足再补词级前缀候选
+            if (p.length >= 4) candidates.addAll(store.sentence(p, 3))
+            if (candidates.size < 3) {
+                for (w in correctAndSuggest(p, 3 - candidates.size)) {
+                    if (w !in candidates) candidates.add(w)
+                    if (candidates.size >= 3) break
+                }
+            }
         }
         layoutKeys(width.toFloat(), height.toFloat())
         invalidate()

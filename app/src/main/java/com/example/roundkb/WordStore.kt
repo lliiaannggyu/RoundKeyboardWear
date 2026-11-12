@@ -11,6 +11,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.text.Normalizer
 import java.util.Locale
+import kotlin.math.ln
+import kotlin.math.max
 
 /**
  * 自定义词库（应用内可导入 / 更新 / 清空，无需重装应用）。
@@ -38,6 +40,18 @@ class WordStore private constructor(context: Context) {
     private var cachedMtime = -1L
     private var sourceName = ""
     private var importTime = 0L
+
+    /** key → 词条 索引（整句解码用），词库加载后延迟构建 */
+    @Volatile private var keyIndex: HashMap<String, ArrayList<Entry>>? = null
+
+    private fun ensureKeyIndex(): HashMap<String, ArrayList<Entry>>? {
+        keyIndex?.let { return it }
+        if (sorted.isEmpty()) return null
+        val m = HashMap<String, ArrayList<Entry>>(sorted.size * 2)
+        for (e in sorted) m.getOrPut(e.key) { ArrayList(2) }.add(e)
+        keyIndex = m
+        return m
+    }
 
     init {
         val sp = appContext.getSharedPreferences("dict_meta", 0)
@@ -102,6 +116,7 @@ class WordStore private constructor(context: Context) {
         } catch (_: Exception) {
         }
         sorted = list.sortedBy { it.key }
+        keyIndex = null   // 词库变了，整句索引重建
         endpointIndex = null   // 词库变了，端点索引重建
     }
 
@@ -201,7 +216,87 @@ class WordStore private constructor(context: Context) {
         return out.toList()
     }
 
-    // ==================== 滑行输入：端点索引 ====================
+    // ==================== 整句拼音解码 ====================
+
+    private val syllablesByFirst: Map<Char, List<String>> =
+        PinyinSyllables.ALL.groupBy({ it[0] }, { it })
+            .mapValues { (_, v) -> v.sortedByDescending { it.length } }
+
+    private val WORD_BONUS = 12.0    // 每多一个音节的词长奖励（长词优先，抑制碎句）
+    private val SINGLE_PEN = 0.7     // 单字词惩罚（高频单字连打不应压过整词）
+    private val SENT_BEAM = 10       // beam 宽度
+
+    /**
+     * 整句拼音：连续按键串（如 "nihaoshijie"）→ 自动分词组句（"你好世界"）。
+     *
+     * 算法：音节切分 DAG + beam 搜索。
+     *  1. 用 [PinyinSyllables] 把输入串切成音节 DAG（xian / xi'an 等歧义全部保留）；
+     *  2. 从每个切分点枚举「连续若干音节组成的段」，段串在词库 key 索引中精确命中的即为词边；
+     *  3. beam 维特比：边权 = ln(词频) + 词长奖励，全局保留 [SENT_BEAM] 条路径；
+     *  4. 到达串尾的路径按得分排序，返回 top-limit 个整句（词直接相连，无分隔符）。
+     *
+     * 纯 uni-gram 词频模型（词库无接续统计），日常短句效果良好；长句质量受词库覆盖影响。
+     */
+    fun sentence(input: String, limit: Int): List<String> {
+        val p = input.lowercase(Locale.ROOT)
+        if (p.isEmpty() || p.length > 48 || sorted.isEmpty()) return emptyList()
+        val idx = ensureKeyIndex() ?: return emptyList()
+
+        class Path(val score: Double, val text: String, val pos: Int)
+
+        // 从 start 起 DFS 枚举所有「音节连续段」：每个在 key 索引中命中的段生成一条词边
+        fun collectEdges(start: Int, out: ArrayList<Triple<Int, Double, String>>) {
+            fun dfs(pos: Int, acc: StringBuilder, sylCount: Int) {
+                if (sylCount >= 8 || acc.length >= 24) return
+                val group = syllablesByFirst[p[pos]] ?: return
+                for (s in group) {
+                    if (!p.startsWith(s, pos)) continue
+                    acc.append(s)
+                    val entries = idx[acc.toString()]
+                    if (entries != null) {
+                        val best = entries.maxByOrNull { it.freq }!!
+                        var base = lnFreq(best.freq)
+                        if (best.value.length == 1) base *= SINGLE_PEN
+                        out.add(Triple(pos + s.length, base + WORD_BONUS * sylCount, best.value))
+                    }
+                    dfs(pos + s.length, acc, sylCount + 1)
+                    acc.setLength(acc.length - s.length)
+                }
+            }
+            dfs(start, StringBuilder(), 0)
+        }
+
+        var beam = ArrayList<Path>(); beam.add(Path(0.0, "", 0))
+        val finished = ArrayList<Pair<Double, String>>()
+        var guard = 0
+        while (beam.isNotEmpty() && guard++ < 24) {
+            val next = ArrayList<Path>(beam.size * 8)
+            for (path in beam) {
+                if (path.pos >= p.length) {
+                    finished.add(path.score to path.text)
+                    continue
+                }
+                val edges = ArrayList<Triple<Int, Double, String>>(8)
+                collectEdges(path.pos, edges)
+                for ((npos, w, word) in edges) {
+                    next.add(Path(path.score + w, path.text + word, npos))
+                }
+            }
+            if (next.isEmpty()) break
+            next.sortByDescending { it.score }
+            if (next.size > SENT_BEAM) next.subList(SENT_BEAM, next.size).clear()
+            beam = next
+        }
+        finished.sortByDescending { it.first }
+        val out = LinkedHashSet<String>()
+        for ((_, s) in finished) {
+            out.add(s)
+            if (out.size >= limit) break
+        }
+        return out.toList()
+    }
+
+    private fun lnFreq(f: Int): Double = ln(max(1, f).toDouble())
 
     /**
      * 端点索引：`(首字母 << 16 | 尾字母) → 词`。
