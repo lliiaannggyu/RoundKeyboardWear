@@ -1,15 +1,24 @@
 package com.example.roundkb
 
+import android.Manifest
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import android.util.AttributeSet
 import android.view.MotionEvent
 import android.view.View
+import android.widget.Toast
+import androidx.core.content.ContextCompat
 import com.example.roundkb.R as AppR
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -57,6 +66,7 @@ class RoundKeyboardView @JvmOverloads constructor(
         const val ACTION_SYMPAGE = 8      // =\< 符号翻页
         const val ACTION_LETTER = 9       // ABC 回字母层
         const val ACTION_EMOJI_TAB = 10   // 表情分类页签（candIndex 存分类号）
+        const val ACTION_MIC = 11         // 工具条麦克风：语音识别后上屏
         const val ACTION_CAND_PREV = 11   // 候选上一页 ‹
         const val ACTION_CAND_NEXT = 12   // 候选下一页 ›
         const val ACTION_ENG = 13         // 中（退出英文模式）
@@ -125,6 +135,8 @@ class RoundKeyboardView @JvmOverloads constructor(
         var emoji = false
         /** Material Icons 矢量资源 id（非 0 时绘制图标而非文字） */
         var iconRes: Int = 0
+        /** 描边键帽（Gboard Wear 工具条式：圆角矩形描边，不填充） */
+        var chip = false
         /** false = 置灰不可点（候选翻页到边界等） */
         var enabled = true
     }
@@ -282,21 +294,26 @@ class RoundKeyboardView @JvmOverloads constructor(
         decoder = d
     }
 
-    /** 顶部工具条：‹ 切换输入法 / 😀 表情 / ?123 符号 / ↵ 回车 / ✕ 收起（Gboard Wear 式） */
+    /** 顶部工具条（Gboard Wear 真机式）：‹ / 😀 / ?123 / 🎤 均为描边键帽，✕ 蓝色实心圆 */
     private fun addToolbar(y0f: Float, cx: Float, cy: Float, R: Float, s: Float) {
         val y = cy + y0f * R
         val hw = 0.098f * R * s
         val hh = 0.085f * R * s
         addKey("‹", null, ACTION_IME_PICKER, cx - 0.46f * R, y, hw, hh, true).apply {
+            chip = true
             iconRes = AppR.drawable.ic_chevron_left
         }
-        addKey("😀", null, ACTION_EMOJI, cx - 0.23f * R, y, hw, hh, true).apply {
-            emoji = true
+        addKey("", null, ACTION_EMOJI, cx - 0.23f * R, y, hw, hh, true).apply {
+            chip = true
+            iconRes = AppR.drawable.ic_mood
         }
         addKey(if (engMode) "EN" else if (mode == MODE_SYMBOL) "ABC" else "?123",
-               null, ACTION_MODE, cx, y, hw, hh, true)
-        addKey("↵", null, ACTION_ENTER, cx + 0.23f * R, y, hw, hh, true).apply {
-            iconRes = AppR.drawable.ic_return
+               null, ACTION_MODE, cx, y, hw, hh, true).apply {
+            chip = true
+        }
+        addKey("", null, ACTION_MIC, cx + 0.23f * R, y, hw, hh, true).apply {
+            chip = true
+            iconRes = AppR.drawable.ic_mic
         }
         addKey("✕", null, ACTION_HIDE, cx + 0.46f * R, y, hw, hh, true).apply {
             iconRes = AppR.drawable.ic_close
@@ -367,8 +384,13 @@ class RoundKeyboardView @JvmOverloads constructor(
             else -> addKey("ABC", null, ACTION_LETTER, cx - 0.40f * R, y, hw, hh, true)
         }
         if (mode != MODE_EMOJI) {
-            addKey("␣", " ", -1, cx, y, 0.26f * R * s, 0.105f * R * s, true).apply {
-                iconRes = AppR.drawable.ic_space
+            // Gboard Wear 式：中文拼音层胶囊显示「拼」（组合时改为显示组合串），符号层为空格
+            if (mode == MODE_LETTER) {
+                addKey(if (engMode) "英" else "拼", " ", -1, cx, y, 0.26f * R * s, 0.105f * R * s, true)
+            } else {
+                addKey("␣", " ", -1, cx, y, 0.26f * R * s, 0.105f * R * s, true).apply {
+                    iconRes = AppR.drawable.ic_space
+                }
             }
         }
         addKey("⌫", null, ACTION_DELETE, cx + 0.40f * R, y, hw, hh, true).apply {
@@ -594,11 +616,27 @@ class RoundKeyboardView @JvmOverloads constructor(
             // 无键帽键（字母 / ⇧ / ⌫）：平时不画底，按下或激活时才高亮
             val bare = k.noFill && k !== pressed &&
                 !(k.action == ACTION_SHIFT && (shift || capsLock))
-            if (!bare) {
-                keyPaint.color = fill
-                val corner = if (k.text == " ") k.hh else k.hh * 0.62f
+            if (k.chip) {
+                // Gboard Wear 工具条描边键帽：圆角矩形描边，按下时填充高亮
                 rectF.set(k.x - k.hw, k.y - k.hh, k.x + k.hw, k.y + k.hh)
-                canvas.drawRoundRect(rectF, corner, corner, keyPaint)
+                if (k === pressed) {
+                    keyPaint.style = Paint.Style.FILL
+                    keyPaint.color = COLOR_PRESSED
+                    canvas.drawRoundRect(rectF, k.hh * 0.5f, k.hh * 0.5f, keyPaint)
+                }
+                keyPaint.style = Paint.Style.STROKE
+                keyPaint.strokeWidth = max(2f, k.hh * 0.16f)
+                keyPaint.color = if (k === pressed) COLOR_TEXT else COLOR_PRESSED
+                canvas.drawRoundRect(rectF, k.hh * 0.5f, k.hh * 0.5f, keyPaint)
+                keyPaint.style = Paint.Style.FILL
+            } else if (!bare) {
+                keyPaint.color = fill
+                if (k.action == ACTION_HIDE) {
+                    canvas.drawCircle(k.x, k.y, k.hh, keyPaint)   // ✕ 蓝色正圆（Gboard 式）
+                } else {
+                    val corner = if (k.text == " ") k.hh else k.hh * 0.62f
+                    canvas.drawRoundRect(rectF, corner, corner, keyPaint)
+                }
             }
 
             // 图标键（Material Icons 矢量）：空格键有组合串时仍显示文字
@@ -635,6 +673,8 @@ class RoundKeyboardView @JvmOverloads constructor(
                 k.emoji && k.action == ACTION_EMOJI -> k.hh * 1.5f        // 工具条 😀
                 k.emoji && k.action == ACTION_EMOJI_TAB -> k.hh * 1.3f    // 分类页签
                 k.emoji -> k.hh * 1.45f                                   // 表情网格
+                k.chip && k.iconRes == 0 -> k.hh * 0.82f                  // 描边键帽内文字（?123/EN）
+                k.noFill && k.iconRes == 0 -> k.hh * 1.35f                // 无键帽字母：加大加亮（Gboard 式）
                 k.control -> k.hh * 1.2f
                 else -> k.hh * 0.95f
             }
@@ -719,6 +759,8 @@ class RoundKeyboardView @JvmOverloads constructor(
                 if (pressed?.action == ACTION_MODE && mode == MODE_LETTER && !engMode) {
                     postDelayed(engLongPress, LONG_PRESS_MS)
                 }
+                // 长按空格：回车
+                if (pressed?.text == " ") postDelayed(spaceLongPress, LONG_PRESS_MS)
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
@@ -733,6 +775,7 @@ class RoundKeyboardView @JvmOverloads constructor(
                     val start = trace.first()
                     if (dist(start, floatArrayOf(x, y)) > 0.12f * safeRadius(size)) {
                         removeCallbacks(engLongPress)    // 手指移开：取消长按
+                        removeCallbacks(spaceLongPress)
                     }
                     if (mode == MODE_EMOJI) {
                         // 表情面板：横滑翻页（不参与滑行打字）
@@ -765,6 +808,7 @@ class RoundKeyboardView @JvmOverloads constructor(
             MotionEvent.ACTION_UP -> {
                 removeCallbacks(deleteRepeat)
                 removeCallbacks(engLongPress)
+                removeCallbacks(spaceLongPress)
                 val longFired = engLongFired
                 engLongFired = false
                 if (emojiSwiped) {
@@ -784,6 +828,7 @@ class RoundKeyboardView @JvmOverloads constructor(
             MotionEvent.ACTION_CANCEL -> {
                 removeCallbacks(deleteRepeat)
                 removeCallbacks(engLongPress)
+                removeCallbacks(spaceLongPress)
                 engLongFired = false
                 pressed = null
                 tracing = false
@@ -830,6 +875,10 @@ class RoundKeyboardView @JvmOverloads constructor(
                     capsLock = false
                 }
                 lastShiftTap = now
+                invalidate()
+            }
+            k.action == ACTION_MIC -> {
+                startVoiceInput()
                 invalidate()
             }
             k.action == ACTION_MODE -> {
@@ -926,6 +975,50 @@ class RoundKeyboardView @JvmOverloads constructor(
                 }
             }
         }
+    }
+
+    /** 长按空格：回车（工具条 ↵ 让位给 🎤 后的回车入口） */
+    private val spaceLongPress = Runnable {
+        if (pressed?.text == " ") {
+            pressed = null
+            SettingsStore.keyVibrate(context)
+            keyListener?.onAction(ACTION_ENTER)
+        }
+    }
+
+    /** 麦克风：语音识别（Gboard Wear 同款工具条位），识别结果整段上屏 */
+    private fun startVoiceInput() {
+        val granted = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        if (!granted) {
+            Toast.makeText(context, "请打开应用设置授权麦克风", Toast.LENGTH_SHORT).show()
+            return
+        }
+        if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+            Toast.makeText(context, "此手表不支持语音识别", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val sr = SpeechRecognizer.createSpeechRecognizer(context)
+        sr.setRecognitionListener(object : RecognitionListener {
+            override fun onResults(results: Bundle?) {
+                val t = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
+                if (!t.isNullOrBlank()) keyListener?.onText(t)
+                sr.destroy()
+            }
+            override fun onError(error: Int) { sr.destroy() }
+            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onPartialResults(partialResults: Bundle?) {}
+            override fun onEvent(eventType: Int, params: Bundle?) {}
+            override fun onReadyForSpeech(params: Bundle?) {}
+            override fun onBeginningOfSpeech() {}
+            override fun onEndOfSpeech() {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+        })
+        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
+                     RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+        }
+        sr.startListening(intent)
     }
 
     /** 空格：有组合串时上屏首选候选（或原始串），否则上屏空格 */

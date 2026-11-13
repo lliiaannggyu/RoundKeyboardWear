@@ -1,5 +1,7 @@
 package com.example.roundkb
 
+import android.Manifest
+import androidx.core.app.ActivityCompat
 import android.content.Intent
 import android.database.Cursor
 import android.net.Uri
@@ -66,6 +68,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 麦克风权限：键盘工具条 🎤 语音输入用（只在首次启动时弹一次授权）
+        ActivityCompat.requestPermissions(
+            this, arrayOf(Manifest.permission.RECORD_AUDIO), 1)
         stats.value = WordStore.get(this).info()
         setContent {
             MaterialTheme {
