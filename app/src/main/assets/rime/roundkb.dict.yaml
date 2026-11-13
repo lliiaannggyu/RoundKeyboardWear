@@ -1,0 +1,14 @@
+# Rime dictionary：圆屏拼音主词库
+# encoding: utf-8
+
+---
+name: roundkb
+version: "1.0"
+sort: by_weight
+use_preset_vocabulary: false
+import_tables:
+  - cn_dicts/8105      # 单字表
+  - cn_dicts/41448     # 大字表
+  - cn_dicts/base      # 基础词库
+  - cn_dicts/others    # 杂项
+...

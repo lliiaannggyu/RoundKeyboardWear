@@ -205,6 +205,9 @@ class RoundKeyboardView @JvmOverloads constructor(
     private val candidates = mutableListOf<String>()
     private val store: WordStore = WordStore.get(context)
 
+    /** librime 组合中（原始串非空）。候选与组合串均来自 rime 快照 */
+    private var rimeComposing = false
+
     // 滑行手势状态
     private val trace = mutableListOf<FloatArray>()
     private var tracing = false
@@ -229,6 +232,51 @@ class RoundKeyboardView @JvmOverloads constructor(
         trailPaint.strokeJoin = Paint.Join.ROUND
         trailPaint.alpha = 210
         isHapticFeedbackEnabled = true
+
+        // librime：幂等启动（部署在后台），就绪后刷新候选显示
+        RimeEngine.ensureStarted(context)
+        RimeEngine.addReadyListener {
+            post { invalidate() }
+        }
+    }
+
+    /** 26 键 / 双键中文模式且 librime 已就绪 → 走 rime 组合（九键 T9 仍用内置引擎） */
+    private fun rimeMode(): Boolean =
+        mode == MODE_LETTER && !engMode &&
+            SettingsStore.keyLayout(context) != SettingsStore.LAYOUT_9 && RimeEngine.ready
+
+    /** 清掉本地的 rime 组合状态（不提交） */
+    private fun clearRimeLocal() {
+        if (rimeComposing) {
+            RimeEngine.clearComposition()
+            rimeComposing = false
+        }
+    }
+
+    /** 用 rime 快照同步组合串与候选 */
+    private fun applyRimeSnapshot(snap: RimeEngine.Snapshot) {
+        buf.setLength(0)
+        buf.append(snap.rawInput)
+        candidates.clear()
+        candidates.addAll(snap.candidates.take(CAND_POOL))
+        candPage = 0
+        rimeComposing = snap.rawInput.isNotEmpty()
+        layoutKeys(width.toFloat(), height.toFloat())
+        invalidate()
+    }
+
+    /** 字母逐字符喂给 rime；rime 要求上屏的文本先走 onText */
+    private fun feedRimeText(t: String) {
+        for (c in t.lowercase()) {
+            if (!c.isLetter()) continue
+            val snap = RimeEngine.processKey(c.code)
+            if (snap == null) {          // 未接管（未就绪/异常）→ 直通上屏
+                keyListener?.onText(c.toString())
+                continue
+            }
+            snap.commit?.let { keyListener?.onText(it) }
+            applyRimeSnapshot(snap)
+        }
     }
 
     // ============================== 布局 ==============================
@@ -1059,6 +1107,19 @@ class RoundKeyboardView @JvmOverloads constructor(
         if (k.candIndex >= 0 && !k.emoji && k.action != ACTION_EMOJI_TAB) {
             val global = candPage * CAND_PER_PAGE + k.candIndex
             val text = candidates.getOrNull(global) ?: k.text ?: return
+            if (rimeComposing) {
+                // rime：按全局序号选候选，commit 由引擎返回
+                val snap = RimeEngine.selectCandidate(global)
+                if (snap != null) {
+                    snap.commit?.let { keyListener?.onText(it) }
+                    applyRimeSnapshot(snap)
+                    return
+                }
+                clearRimeLocal()             // 选择失败：清组合避免卡死
+                keyListener?.onText(text)
+                resetComposition()
+                return
+            }
             keyListener?.onText(text)
             if (buf.isNotEmpty()) store.learn(buf.toString(), text)   // 自学习
             resetComposition()
@@ -1082,6 +1143,7 @@ class RoundKeyboardView @JvmOverloads constructor(
                 invalidate()
             }
             k.action == ACTION_MODE -> {
+                clearRimeLocal()
                 if (engMode) {
                     engMode = false                      // EN 键：切回中文
                 } else {
@@ -1108,10 +1170,12 @@ class RoundKeyboardView @JvmOverloads constructor(
                 }
             }
             k.action == ACTION_ENG -> {
+                clearRimeLocal()
                 engMode = false
                 relayout()
             }
             k.action == ACTION_EMOJI -> {
+                clearRimeLocal()
                 mode = if (mode == MODE_EMOJI) MODE_LETTER else MODE_EMOJI
                 if (mode == MODE_EMOJI && emojiCat == 0 && recentEmoji.isEmpty()) {
                     emojiCat = 1   // 从未用过表情：默认进「笑脸」分类
@@ -1152,8 +1216,18 @@ class RoundKeyboardView @JvmOverloads constructor(
             k.action == ACTION_IME_PICKER || k.action == ACTION_HIDE ->
                 keyListener?.onAction(k.action)
             k.action == ACTION_ENTER -> {
-                // 回车：先上屏未提交的组合串（若有），再换行
-                if (buf.isNotEmpty()) {
+                // 回车：rime 组合中先上屏原始输入串，再换行
+                if (rimeComposing) {
+                    val snap = RimeEngine.processKey(RimeEngine.KC_RETURN)
+                    if (snap != null) {
+                        snap.commit?.let { keyListener?.onText(it) }
+                        applyRimeSnapshot(snap)
+                    } else {
+                        keyListener?.onText(buf.toString())
+                        clearRimeLocal()
+                        resetComposition()
+                    }
+                } else if (buf.isNotEmpty()) {
                     keyListener?.onText(buf.toString())
                     resetComposition()
                 }
@@ -1185,7 +1259,9 @@ class RoundKeyboardView @JvmOverloads constructor(
                 if (mode == MODE_LETTER && shift && !capsLock && ch.isLowerCase()) {
                     ch = ch.uppercaseChar()
                 }
-                if (mode == MODE_LETTER && store.hasDictionary && !engMode) {
+                if (rimeMode()) {
+                    feedRimeText(ch.toString())
+                } else if (mode == MODE_LETTER && store.hasDictionary && !engMode) {
                     buf.append(ch.toString())
                     updateCandidates()
                 } else {
@@ -1198,6 +1274,8 @@ class RoundKeyboardView @JvmOverloads constructor(
                 val t0 = k.text!!
                 if (t0 == " ") {
                     handleSpace()
+                } else if (rimeMode() && t0.length == 1 && t0[0].isLetter()) {
+                    feedRimeText(t0)                 // rime 组合（26/双键中文）
                 } else if (mode == MODE_LETTER && store.hasDictionary && !engMode) {
                     buf.append(t0)                       // 有词库：字母进入组合串
                     updateCandidates()
@@ -1260,8 +1338,23 @@ class RoundKeyboardView @JvmOverloads constructor(
         sr.startListening(intent)
     }
 
-    /** 空格：有组合串时上屏首选候选（或原始串），否则上屏空格 */
+    /** 空格：rime 组合中确认首选候选；否则有组合串上屏首选（或原始串），空闲上屏空格 */
     private fun handleSpace() {
+        if (rimeComposing) {
+            val snap = RimeEngine.processKey(RimeEngine.KC_SPACE)
+            if (snap != null) {
+                snap.commit?.let { keyListener?.onText(it) }
+                applyRimeSnapshot(snap)
+                if (!rimeComposing && snap.commit == null) keyListener?.onText(" ")
+                return
+            }
+            // rime 未接管：兜底上屏首选
+            val t = if (candidates.isEmpty()) buf.toString() else candidates[0]
+            keyListener?.onText(t)
+            resetComposition()
+            keyListener?.onText(" ")
+            return
+        }
         if (buf.isNotEmpty()) {
             val t = if (candidates.isEmpty()) buf.toString() else candidates[0]
             keyListener?.onText(t)
@@ -1272,6 +1365,15 @@ class RoundKeyboardView @JvmOverloads constructor(
     }
 
     private fun handleDelete() {
+        if (rimeComposing) {
+            // rime：BackSpace = 回删一个输入字符（仅组合中接管；提交后交还系统删除）
+            val snap = RimeEngine.processKey(RimeEngine.KC_BACKSPACE)
+            if (snap != null) {
+                applyRimeSnapshot(snap)
+                return
+            }
+            rimeComposing = false
+        }
         if (buf.isNotEmpty()) {
             buf.deleteCharAt(buf.length - 1)
             updateCandidates()
@@ -1281,6 +1383,7 @@ class RoundKeyboardView @JvmOverloads constructor(
     }
 
     private fun resetComposition() {
+        clearRimeLocal()
         buf.setLength(0)
         candidates.clear()
         candPage = 0

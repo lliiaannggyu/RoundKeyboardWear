@@ -14,6 +14,12 @@ class RoundIME : InputMethodService(), RoundKeyboardView.KeyListener {
 
     private var kb: RoundKeyboardView? = null
 
+    override fun onCreate() {
+        super.onCreate()
+        // 尽早启动 librime（assets 同步与部署在后台线程，键盘界面不受阻塞）
+        RimeEngine.ensureStarted(this)
+    }
+
     override fun onCreateInputView(): View {
         kb = RoundKeyboardView(this).apply {
             keyListener = this@RoundIME

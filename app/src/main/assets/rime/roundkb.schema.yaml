@@ -1,0 +1,145 @@
+# Rime schema：圆屏拼音（基于雾凇拼音精简）
+# 去除 lua / opencc / 英文次翻译器 / 部件反查依赖，保留：
+#   超级简拼、模糊音、自动纠错、v/u 转换、中文标点
+# encoding: utf-8
+
+schema:
+  schema_id: roundkb
+  name: 圆屏拼音
+  version: "1.0"
+
+switches:
+  - name: ascii_mode
+    states: [ 中, 英 ]
+  - name: ascii_punct
+    states: [ ¥, $ ]
+
+engine:
+  processors:
+    - ascii_composer
+    - recognizer
+    - key_binder
+    - speller
+    - punctuator
+    - selector
+    - navigator
+    - express_editor
+  segmentors:
+    - ascii_segmentor
+    - matcher
+    - abc_segmentor
+    - punct_segmentor
+    - fallback_segmentor
+  translators:
+    - punct_translator
+    - script_translator
+  filters:
+    - uniquifier
+
+translator:
+  dictionary: roundkb
+  enable_word_completion: true
+  preedit_format:
+    - xform/([jqxy])v/$1u/
+    - xform/([nl])v/$1v/
+    - xform/([nl])ue/$1ve/
+
+editor:
+  bindings:
+    space: confirm
+    Return: commit_raw_input
+    BackSpace: revert
+    Delete: delete
+    Escape: cancel
+
+speller:
+  alphabet: zyxwvutsrqponmlkjihgfedcba
+  initials: zyxwvutsrqponmlkjihgfedcba
+  delimiter: " '"
+  algebra:
+    ### 超级简拼
+    - erase/^hm$/
+    - erase/^m$/
+    - erase/^n$/
+    - erase/^ng$/
+    - abbrev/^([a-z]).+$/$1/
+    - abbrev/^([zcs]h).+$/$1/
+    ### v u 转换（支持 qv → qu 等误拼）
+    - derive/^([nl])ve$/$1ue/
+    - derive/^([jqxy])u/$1v/
+    - derive/^([nl])ue$/$1ve/
+    - derive/^([jqxy])v/$1u/
+    ### 模糊音（与输入法设置默认一致，编译期生效）
+    - derive/^([zcs])h/$1/
+    - derive/^([zcs])([^h])/$1h$2/
+    - derive/ang$/an/
+    - derive/an$/ang/
+    - derive/eng$/en/
+    - derive/en$/eng/
+    - derive/in$/ing/
+    - derive/ing$/in/
+    ### 自动纠错
+    # zh、ch、sh
+    - derive/([zcs])h(a|e|i|u|ai|ei|an|en|ou|uo|ua|un|ui|uan|uai|uang|ang|eng|ong)$/h$1$2/
+    - derive/([zcs])h([aeiu])$/$1$2h/
+    # ai
+    - derive/^([wghk])ai$/$1ia/
+    # ei
+    - derive/([wfghkz])ei$/$1ie/
+    # ie
+    - derive/([jqx])ie$/$1ei/
+    # ao
+    - derive/([rtypsdghklzcbnm])ao$/$1oa/
+    # ou
+    - derive/([ypfm])ou$/$1uo/
+    # ang
+    - derive/([wrtypsdfghklzcbnm])ang$/$1nag/
+    - derive/([wrtypsdfghklzcbnm])ang$/$1agn/
+    # eng
+    - derive/([wrtpsdfghklzcbnm])eng$/$1neg/
+    - derive/([wrtpsdfghklzcbnm])eng$/$1egn/
+    # ing
+    - derive/([qtypdjlxbnm])ing$/$1nig/
+    - derive/([qtypdjlxbnm])ing$/$1ign/
+    # ong
+    - derive/([rtysdghklzcn])ong$/$1nog/
+    - derive/([rtysdghklzcn])ong$/$1ogn/
+    # iao
+    - derive/([qtpdjlxbnm])iao$/$1ioa/
+    - derive/([qtpdjlxbnm])iao$/$1oia/
+    # ui
+    - derive/([rtsghkzc])ui$/$1iu/
+    # iu
+    - derive/([qjlxnm])iu$/$1ui/
+    # iang
+    - derive/([qjlxn])iang$/$1aing/
+    - derive/([qjlxn])iang$/$1inag/
+    # ua
+    - derive/([gkhs])ua$/$1au/
+    # uai
+    - derive/([gkhs])uai$/$1aui/
+    # uan
+    - derive/([qrtysdghjklzxcn])uan$/$1aun/
+    # ue
+    - derive/([nlyjqx])ue$/$1eu/
+    # uang
+    - derive/([gkhs])uang$/$1aung/
+    - derive/([gkhs])uang$/$1uagn/
+    - derive/([gkhs])uang$/$1unag/
+    - derive/([gkhs])uang$/$1augn/
+    # iong
+    - derive/([jqx])iong$/$1inog/
+    - derive/([jqx])iong$/$1oing/
+    - derive/([jqx])iong$/$1iogn/
+    - derive/([jqx])iong$/$1oign/
+    # 其他
+    - derive/([rtsdghkzc])o(u|ng)$/$1o/
+    - derive/(.+)ong$/$1on/
+    - derive/([tl])eng$/$1en/
+    - derive/([qwrtypsdfghjklzxcbnm])([aeio])ng$/$1ng/
+
+key_binder:
+  bindings:
+    # 逗号句号不影响组句（punctuator 已处理），这里仅绑翻页到 -/= 以备用
+    - { accept: "Page_Up", send: "Home" }
+    - { accept: "Page_Down", send: "End" }

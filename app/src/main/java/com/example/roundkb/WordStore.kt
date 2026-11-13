@@ -2,7 +2,11 @@ package com.example.roundkb
 
 import android.content.Context
 import android.content.SharedPreferences
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.BufferedReader
+import java.io.DataInputStream
+import java.io.DataOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
@@ -11,6 +15,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.text.Normalizer
 import java.util.Locale
+import java.util.concurrent.CopyOnWriteArrayList
 import kotlin.math.ln
 import kotlin.math.max
 
@@ -223,10 +228,9 @@ class WordStore private constructor(context: Context) {
         if (t.contains('\uFFFD')) return null                           // 二进制词库（.scel 等）乱码
         if (!isHanCol(t) && t.contains(':')) return null                // yaml 元数据 name: xxx
 
-        val cols = t.split(Regex("[\\t ]+")).filter { it.isNotEmpty() }
+        val cols = t.split(SPLIT_RE).filter { it.isNotEmpty() }
         if (cols.isEmpty()) return null
 
-        val pinyinRegex = Regex("^[A-Za-züÜ]+[1-5]?$")
         val hanCols = mutableListOf<String>()
         val alphaCols = mutableListOf<String>()     // 出现在首个数字列之前的字母列
         var freq = 1
@@ -240,7 +244,7 @@ class WordStore private constructor(context: Context) {
                     // 数字列之后出现的字母列一律视为词性等标注，不再当拼音
                 }
                 // 纯字母列（含带声调的 nǐ / ü 等；normPinyin 统一剥声调）
-                c.all { it.isLetter() } || pinyinRegex.matches(c) ->
+                c.all { it.isLetter() } || PINYIN_RE.matches(c) ->
                     if (!seenNum) alphaCols.add(c)
                 // 其它（词性后缀、bin 字段等）忽略
             }
@@ -586,6 +590,10 @@ class WordStore private constructor(context: Context) {
         private const val MAX_ENTRIES = 200000   // 防止大词库撑爆内存
         private const val MAX_MATCH_SCAN = 500   // 单次前缀扫描上限
         private const val T9_EXP_MAX = 400       // 九键拼音展开上限
+
+        // 预编译正则（词库 17 万行逐行解析，不能每行重编译）
+        private val SPLIT_RE = Regex("[\\t ]+")
+        private val PINYIN_RE = Regex("^[A-Za-züÜ]+[1-5]?$")
 
         @Volatile private var instance: WordStore? = null
         fun get(c: Context): WordStore =

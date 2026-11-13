@@ -72,6 +72,9 @@ class MainActivity : ComponentActivity() {
         ActivityCompat.requestPermissions(
             this, arrayOf(Manifest.permission.RECORD_AUDIO), 1)
         stats.value = WordStore.get(this).info()
+        // 提前启动 librime（设置页打开时后台部署，下次呼出键盘即就绪）
+        RimeEngine.ensureStarted(this)
+        RimeEngine.addReadyListener { refreshStats() }
         val ver = try {
             packageManager.getPackageInfo(packageName, 0).versionName ?: ""
         } catch (_: Exception) { "" }
@@ -88,7 +91,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun refreshStats() {
-        stats.value = WordStore.get(this).info()
+        val eng = when {
+            RimeEngine.ready -> "Rime 拼音引擎：就绪"
+            RimeEngine.deploying -> "Rime 拼音引擎：词库部署中…"
+            else -> "Rime 拼音引擎：启动中…"
+        }
+        stats.value = "$eng\n" + WordStore.get(this).info()
     }
 }
 
