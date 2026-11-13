@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 应用内更新：缓存目录下的更新包对系统安装器可见 -->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <cache-path name="update" path="." />
+</paths>

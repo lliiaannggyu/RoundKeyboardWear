@@ -320,7 +320,7 @@ class WordStore private constructor(context: Context) {
         // 从 start 起 DFS 枚举所有「音节连续段」：每个在 key 索引中命中的段生成一条词边
         fun collectEdges(start: Int, out: ArrayList<Triple<Int, Double, String>>) {
             fun dfs(pos: Int, acc: StringBuilder, sylCount: Int) {
-                if (sylCount >= 8 || acc.length >= 24) return
+                if (pos >= p.length || sylCount >= 8 || acc.length >= 24) return
                 val group = syllablesByFirst[p[pos]] ?: return
                 for (s in group) {
                     if (!p.startsWith(s, pos)) continue
@@ -346,6 +346,156 @@ class WordStore private constructor(context: Context) {
             val next = ArrayList<Path>(beam.size * 8)
             for (path in beam) {
                 if (path.pos >= p.length) {
+                    finished.add(path.score to path.text)
+                    continue
+                }
+                val edges = ArrayList<Triple<Int, Double, String>>(8)
+                collectEdges(path.pos, edges)
+                for ((npos, w, word) in edges) {
+                    next.add(Path(path.score + w, path.text + word, npos))
+                }
+            }
+            if (next.isEmpty()) break
+            next.sortByDescending { it.score }
+            if (next.size > SENT_BEAM) next.subList(SENT_BEAM, next.size).clear()
+            beam = next
+        }
+        finished.sortByDescending { it.first }
+        val out = LinkedHashSet<String>()
+        for ((_, s) in finished) {
+            out.add(s)
+            if (out.size >= limit) break
+        }
+        return out.toList()
+    }
+
+    // ==================== 九键 T9 解码 ====================
+
+    /** T9 数字键字母组（下标 = 数字） */
+    private val DIGIT_LETTERS = arrayOf(
+        "", "", "ABC", "DEF", "GHI", "JKL", "MNO", "PQRS", "TUV", "WXYZ")
+
+    /** 拼音字母 → 所属数字键 */
+    private val digitOf: Map<Char, Char> = buildMap {
+        for (d in '2'..'9') for (c in DIGIT_LETTERS[d - '0']) put(c, d)
+    }
+
+    /** 按首个字母所在数字分组的音节表（长度降序，整句切分用） */
+    private val syllablesByDigit: Map<Char, List<String>> =
+        PinyinSyllables.ALL.groupBy { digitOf[it[0]]!! }
+            .mapValues { (_, v) -> v.sortedByDescending { it.length } }
+
+    private val syllableSet = HashSet<String>(PinyinSyllables.ALL.size * 2)
+    private val syllablePrefixSet = HashSet<String>(PinyinSyllables.ALL.size * 6)
+
+    init {
+        for (s in PinyinSyllables.ALL) {
+            syllableSet.add(s)
+            for (i in 1..s.length) syllablePrefixSet.add(s.substring(0, i))
+        }
+    }
+
+    /** 音节 s 是否与数字串 digits 从 pos 起逐位匹配（字母都属于对应数字键） */
+    private fun matchesDigits(s: String, digits: String, pos: Int): Boolean {
+        if (pos + s.length > digits.length) return false
+        for (i in s.indices) {
+            if (digitOf[s[i]] != digits[pos + i]) return false
+        }
+        return true
+    }
+
+    /**
+     * 数字串 → 所有可能的拼音串（每个音节段必须合法或为合法音节前缀）。
+     * DP：状态 =（已消耗位数, 当前音节前缀），状态内保留全部代表串（不同串对应不同词），
+     * 总量超上限时截断防爆炸。
+     */
+    private fun t9Expansions(d: String): List<String> {
+        if (d.isEmpty() || d.length > 12 || d.any { it < '2' || it > '9' }) return emptyList()
+        var states = LinkedHashMap<String, MutableSet<String>>()
+        for (c in DIGIT_LETTERS[d[0] - '0']) {
+            if (c.toString() in syllablePrefixSet)
+                states.putIfAbsent(c.toString(), LinkedHashSet(listOf(c.toString())))
+        }
+        for (i in 1 until d.length) {
+            val next = LinkedHashMap<String, MutableSet<String>>()
+            for (c in DIGIT_LETTERS[d[i] - '0']) {
+                for ((syl, accs) in states) {
+                    val s2 = syl + c
+                    if (s2 in syllablePrefixSet) {
+                        val set = next.getOrPut(s2) { LinkedHashSet() }
+                        for (a in accs) set.add(a + c)
+                    }
+                    // 当前音节已完整 → 可作音节边界，c 开新音节
+                    if (syl in syllableSet && c.toString() in syllablePrefixSet) {
+                        val set = next.getOrPut(c.toString()) { LinkedHashSet() }
+                        for (a in accs) set.add(a + c)
+                    }
+                }
+            }
+            if (next.isEmpty()) return emptyList()
+            states = next
+        }
+        val out = LinkedHashSet<String>()
+        for ((_, accs) in states) {
+            for (a in accs) {
+                out.add(a)
+                if (out.size >= T9_EXP_MAX) return out.toList()
+            }
+        }
+        return out.toList()
+    }
+
+    /** 九键词级候选：数字串 → 拼音串展开 → 词库前缀匹配（按词频优先合并） */
+    fun t9Candidates(digits: String, limit: Int): List<String> {
+        if (digits.isEmpty() || sorted.isEmpty() || limit <= 0) return emptyList()
+        val out = LinkedHashSet<String>()
+        for (e in t9Expansions(digits)) {
+            for (w in prefix(e, limit - out.size)) {
+                out.add(w)
+                if (out.size >= limit) return out.toList()
+            }
+        }
+        return out.toList()
+    }
+
+    /**
+     * 九键整句解码：数字串（如 "6426424926"）→ 自动分词组句。
+     * 与 [sentence] 同一 beam 维特比框架，仅音节切分受数字键约束。
+     */
+    fun t9Sentence(digits: String, limit: Int): List<String> {
+        if (digits.isEmpty() || digits.length > 32 || sorted.isEmpty()) return emptyList()
+        val idx = ensureKeyIndex() ?: return emptyList()
+
+        class Path(val score: Double, val text: String, val pos: Int)
+
+        fun collectEdges(start: Int, out: ArrayList<Triple<Int, Double, String>>) {
+            fun dfs(pos: Int, acc: StringBuilder, sylCount: Int) {
+                if (pos >= digits.length || sylCount >= 8 || acc.length >= 24) return
+                val group = syllablesByDigit[digits[pos]] ?: return
+                for (s in group) {
+                    if (!matchesDigits(s, digits, pos)) continue
+                    acc.append(s)
+                    val entries = idx[normFuzzy(acc.toString())]
+                    if (entries != null) {
+                        val best = entries.maxByOrNull { it.freq }!!
+                        var base = lnFreq(best.freq)
+                        if (best.value.length == 1) base *= SINGLE_PEN
+                        out.add(Triple(pos + s.length, base + WORD_BONUS * sylCount, best.value))
+                    }
+                    dfs(pos + s.length, acc, sylCount + 1)
+                    acc.setLength(acc.length - s.length)
+                }
+            }
+            dfs(start, StringBuilder(), 0)
+        }
+
+        var beam = ArrayList<Path>(); beam.add(Path(0.0, "", 0))
+        val finished = ArrayList<Pair<Double, String>>()
+        var guard = 0
+        while (beam.isNotEmpty() && guard++ < 24) {
+            val next = ArrayList<Path>(beam.size * 8)
+            for (path in beam) {
+                if (path.pos >= digits.length) {
                     finished.add(path.score to path.text)
                     continue
                 }
@@ -435,6 +585,7 @@ class WordStore private constructor(context: Context) {
     companion object {
         private const val MAX_ENTRIES = 200000   // 防止大词库撑爆内存
         private const val MAX_MATCH_SCAN = 500   // 单次前缀扫描上限
+        private const val T9_EXP_MAX = 400       // 九键拼音展开上限
 
         @Volatile private var instance: WordStore? = null
         fun get(c: Context): WordStore =

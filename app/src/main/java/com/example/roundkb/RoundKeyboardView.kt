@@ -53,6 +53,12 @@ class RoundKeyboardView @JvmOverloads constructor(
     interface KeyListener {
         fun onText(text: String)
         fun onAction(action: Int)
+
+        /** 当前光标位置（相对文本末尾 4096 字窗口的偏移；滑动空格移光标用） */
+        fun cursorPos(): Int = 0
+
+        /** 把光标移到绝对位置 pos（滑动空格移光标用） */
+        fun onCursorSet(pos: Int) {}
     }
 
     companion object {
@@ -66,7 +72,7 @@ class RoundKeyboardView @JvmOverloads constructor(
         const val ACTION_SYMPAGE = 8      // =\< 符号翻页
         const val ACTION_LETTER = 9       // ABC 回字母层
         const val ACTION_EMOJI_TAB = 10   // 表情分类页签（candIndex 存分类号）
-        const val ACTION_MIC = 11         // 工具条麦克风：语音识别后上屏
+        const val ACTION_MIC = 14         // 工具条麦克风：语音识别后上屏
         const val ACTION_CAND_PREV = 11   // 候选上一页 ‹
         const val ACTION_CAND_NEXT = 12   // 候选下一页 ›
         const val ACTION_ENG = 13         // 中（退出英文模式）
@@ -139,6 +145,10 @@ class RoundKeyboardView @JvmOverloads constructor(
         var chip = false
         /** false = 置灰不可点（候选翻页到边界等） */
         var enabled = true
+        /** 键帽下部小字（九键：数字下方的字母组） */
+        var subLabel: String? = null
+        /** 键代表的字母集合（双键 "ab"；滑行解码与双键选字母用） */
+        var chars: String? = null
     }
 
     private val keys = mutableListOf<Key>()
@@ -183,6 +193,13 @@ class RoundKeyboardView @JvmOverloads constructor(
     private var shift = false
     private var capsLock = false
     private var lastShiftTap = 0L
+    /** 最近一次抬指的 x（双键左右半区选字母用） */
+    private var lastTapX = 0f
+
+    // 空格横向滑动 = 移动光标
+    private var cursorSlide = false
+    private var cursorBase = 0      // 拖动起点光标位置
+    private var cursorLast = 0      // 已同步到输入框的光标位置
 
     private val buf = StringBuilder()
     private val candidates = mutableListOf<String>()
@@ -266,10 +283,14 @@ class RoundKeyboardView @JvmOverloads constructor(
             addToolbar(-0.60f, cx, cy, R, s)   // 表情层由页签行取代工具条
         }
         when (mode) {
-            MODE_LETTER -> {
-                addRow(ROW0, -0.30f, cx, cy, R, unit, bare = true)
-                addRow(ROW1, -0.02f, cx, cy, R, unit, bare = true)
-                addRow(ROW2, 0.26f, cx, cy, R, unit, bare = true)
+            MODE_LETTER -> when (SettingsStore.keyLayout(context)) {
+                SettingsStore.LAYOUT_9 -> addT9Grid(cx, cy, R, s)
+                SettingsStore.LAYOUT_DUAL -> addDualGrid(cx, cy, R, s)
+                else -> {
+                    addRow(ROW0, -0.30f, cx, cy, R, unit, bare = true)
+                    addRow(ROW1, -0.02f, cx, cy, R, unit, bare = true)
+                    addRow(ROW2, 0.26f, cx, cy, R, unit, bare = true)
+                }
             }
             MODE_SYMBOL -> {
                 val page = SYM_PAGES[symPage]
@@ -293,8 +314,18 @@ class RoundKeyboardView @JvmOverloads constructor(
         val letterKeys = ArrayList<GlideKey>(26)
         val seen = HashSet<Char>(32)
         for (k in keys) {
+            if (k.control || k.candIndex >= 0) continue
+            if (k.chars != null) {
+                // 双键：一个键注册两个字母（滑行时共用键位几何）
+                for (c in k.chars!!) {
+                    val ch = c.lowercaseChar()
+                    if (!ch.isLetter() || !seen.add(ch)) continue
+                    letterKeys.add(GlideKey(ch, k.x, k.y, k.hw * 2f, k.hh * 2f))
+                }
+                continue
+            }
             val t = k.text ?: continue
-            if (k.control || k.candIndex >= 0 || t.length != 1) continue
+            if (t.length != 1) continue
             val ch = t[0].lowercaseChar()
             if (!ch.isLetter() || !seen.add(ch)) continue
             letterKeys.add(GlideKey(ch, k.x, k.y, k.hw * 2f, k.hh * 2f))
@@ -327,6 +358,50 @@ class RoundKeyboardView @JvmOverloads constructor(
         }
         addKey("✕", null, ACTION_HIDE, cx + 0.46f * R, y, hw, hh, true).apply {
             iconRes = AppR.drawable.ic_close
+        }
+    }
+
+    /** 当前是否处于九键 T9 中文模式（字母层 + 九键布局 + 有词库非英文） */
+    private fun t9Mode(): Boolean =
+        mode == MODE_LETTER && !engMode &&
+            SettingsStore.keyLayout(context) == SettingsStore.LAYOUT_9 && store.hasDictionary
+
+    /** 九键布局：3×3 数字键（2-9 标字母组，1 为句读键），点按进 T9 拼音解码 */
+    private fun addT9Grid(cx: Float, cy: Float, R: Float, s: Float) {
+        val su = s.coerceIn(0.9f, 1.1f)
+        val unit = 0.325f * R * su
+        val hw = unit * 0.46f
+        val hh = 0.115f * R * su
+        val ys = listOf(-0.29f, -0.02f, 0.26f)
+        val subs = arrayOf("。？！", "ABC", "DEF", "GHI", "JKL", "MNO", "PQRS", "TUV", "WXYZ")
+        for (idx in 1..9) {
+            val row = (idx - 1) / 3
+            val col = (idx - 1) % 3
+            val k = addKey(idx.toString(), idx.toString(), -1,
+                cx + (col - 1) * unit, cy + ys[row] * R, hw, hh, true)
+            k.subLabel = subs[idx - 1]
+            k.chars = null
+        }
+    }
+
+    /** 双键布局：13 个键各含两个字母（左半/右半区点按选字母），组合引擎与 26 键共用 */
+    private fun addDualGrid(cx: Float, cy: Float, R: Float, s: Float) {
+        val su = s.coerceIn(0.85f, 1.15f)
+        val dTop = 0.30f * R
+        val chordTop = sqrt(max(0f, R * R - dTop * dTop))
+        val unit = min(2f * chordTop * ROW_SPAN / 5f * su, 0.37f * R)
+        val hw = unit * 0.46f
+        val hh = 0.122f * R * su
+        val rows = arrayOf("ab,cd,ef,gh,ij", "kl,mn,op,qr,st", "uv,wx,yz")
+        val ys = listOf(-0.30f, -0.02f, 0.26f)
+        rows.forEachIndexed { r, row ->
+            val items = row.split(",")
+            items.forEachIndexed { i, pair ->
+                val x = cx + (i - (items.size - 1) / 2f) * unit
+                val k = addKey(pair, null, -1, x, cy + ys[r] * R, hw, hh, false)
+                k.noFill = true
+                k.chars = pair
+            }
         }
     }
 
@@ -555,12 +630,23 @@ class RoundKeyboardView @JvmOverloads constructor(
         candPage = 0
         val p = buf.toString()
         if (p.isNotEmpty() && store.hasDictionary) {
-            // 整句拼音优先：连续按键串 → 自动分词组句；不足再用词级前缀候选补齐
-            if (p.length >= 4) candidates.addAll(store.sentence(p, 6))
-            if (candidates.size < CAND_POOL) {
-                for (w in correctAndSuggest(p, CAND_POOL - candidates.size)) {
-                    if (w !in candidates) candidates.add(w)
-                    if (candidates.size >= CAND_POOL) break
+            if (t9Mode()) {
+                // 九键 T9：整句解码 + 词级候选（数字串 → 拼音展开受音节表约束）
+                if (p.length >= 4) candidates.addAll(store.t9Sentence(p, 6))
+                if (candidates.size < CAND_POOL) {
+                    for (w in store.t9Candidates(p, CAND_POOL - candidates.size)) {
+                        if (w !in candidates) candidates.add(w)
+                        if (candidates.size >= CAND_POOL) break
+                    }
+                }
+            } else {
+                // 整句拼音优先：连续按键串 → 自动分词组句；不足再用词级前缀候选补齐
+                if (p.length >= 4) candidates.addAll(store.sentence(p, 6))
+                if (candidates.size < CAND_POOL) {
+                    for (w in correctAndSuggest(p, CAND_POOL - candidates.size)) {
+                        if (w !in candidates) candidates.add(w)
+                        if (candidates.size >= CAND_POOL) break
+                    }
                 }
             }
         }
@@ -716,8 +802,28 @@ class RoundKeyboardView @JvmOverloads constructor(
             textPaint.textSize = size
             textPaint.color = txt
             val fm = textPaint.fontMetrics
-            val ty = k.y - (fm.ascent + fm.descent) / 2f
+            var ty = k.y - (fm.ascent + fm.descent) / 2f
+            if (k.subLabel != null) ty -= k.hh * 0.16f      // 有下部小字：主体上移
             canvas.drawText(label, k.x, ty, textPaint)
+            k.subLabel?.let { sub ->
+                textPaint.textSize = size * 0.52f
+                textPaint.color = 0xFF9AA0A6.toInt()
+                val fm2 = textPaint.fontMetrics
+                val ty2 = k.y + k.hh * 0.52f - (fm2.ascent + fm2.descent) / 2f
+                canvas.drawText(sub, k.x, ty2, textPaint)
+            }
+        }
+
+        // 空格滑动光标提示：空格胶囊两侧画小箭头
+        if (cursorSlide) {
+            keys.lastOrNull { it.text == " " }?.let { sk ->
+                textPaint.textSize = sk.hh * 0.8f
+                textPaint.color = COLOR_ACCENT
+                val fm3 = textPaint.fontMetrics
+                val ty3 = sk.y - (fm3.ascent + fm3.descent) / 2f
+                canvas.drawText("‹", sk.x - sk.hw * 0.62f, ty3, textPaint)
+                canvas.drawText("›", sk.x + sk.hw * 0.62f, ty3, textPaint)
+            }
         }
 
         // 表情层附加绘制：当前分类名（页签条下方）+ 最近分类为空时的提示 + 页码圆点
@@ -779,6 +885,28 @@ class RoundKeyboardView @JvmOverloads constructor(
         }
     }
 
+    /** 空格键上横向拖动 → 光标左右移动（Gboard 式）。返回 true = 本事件已被光标模式接管 */
+    private fun handleCursorSlide(x: Float, size: Float): Boolean {
+        val dx = x - trace.first()[0]
+        if (!cursorSlide) {
+            if (pressed?.text != " " || buf.isNotEmpty()) return false
+            if (abs(dx) < 0.05f * safeRadius(size)) return false
+            cursorSlide = true
+            pressed = null
+            removeCallbacks(spaceLongPress)
+            cursorBase = keyListener?.cursorPos() ?: 0
+            cursorLast = cursorBase
+        }
+        val step = max(6f, 0.045f * safeRadius(size))   // 每 4.5% 安全半径移动 1 字符
+        val target = cursorBase + Math.round(dx / step)
+        if (target != cursorLast) {
+            keyListener?.onCursorSet(target)
+            cursorLast = target
+            SettingsStore.keyVibrate(context)
+        }
+        return true
+    }
+
     override fun onTouchEvent(ev: MotionEvent): Boolean {
         val x = ev.x
         val y = ev.y
@@ -788,6 +916,7 @@ class RoundKeyboardView @JvmOverloads constructor(
                 trace.add(floatArrayOf(x, y))
                 tracing = false
                 emojiSwiped = false
+                cursorSlide = false
                 // 手指是否落在分类页签条带内（表情层：拖动页签条，而非翻页）
                 tabTouch = mode == MODE_EMOJI && emojiTabSpacing > 0f &&
                     abs(y - emojiTabY) < emojiTabHh * 2.6f
@@ -844,6 +973,8 @@ class RoundKeyboardView @JvmOverloads constructor(
                         } else if (!emojiSwiped) {
                             updatePressed(x, y)
                         }
+                    } else if (handleCursorSlide(x, size)) {
+                        // 空格横向滑动：光标模式接管（优先于滑行手势）
                     } else if (dist(start, floatArrayOf(x, y)) > GESTURE_START * safeRadius(size)) {
                         tracing = true                   // 进入滑行模式
                         pressed = null
@@ -862,9 +993,12 @@ class RoundKeyboardView @JvmOverloads constructor(
                 removeCallbacks(deleteRepeat)
                 removeCallbacks(engLongPress)
                 removeCallbacks(spaceLongPress)
+                lastTapX = x
                 val longFired = engLongFired
                 engLongFired = false
-                if (tabDragging) {
+                if (cursorSlide) {
+                    // 空格滑动已移动光标，不触发点按
+                } else if (tabDragging) {
                     // 页签条滑动结束：吸附到最近页签中心
                     tabDragging = false
                     if (emojiTabSpacing > 0f) {
@@ -883,6 +1017,7 @@ class RoundKeyboardView @JvmOverloads constructor(
                 pressed = null
                 tracing = false
                 emojiSwiped = false
+                cursorSlide = false
                 trace.clear()
                 invalidate()
                 return true
@@ -897,6 +1032,7 @@ class RoundKeyboardView @JvmOverloads constructor(
                 pressed = null
                 tracing = false
                 emojiSwiped = false
+                cursorSlide = false
                 trace.clear()
                 invalidate()
                 return true
@@ -1022,6 +1158,41 @@ class RoundKeyboardView @JvmOverloads constructor(
                     resetComposition()
                 }
                 keyListener?.onAction(ACTION_ENTER)
+            }
+            // 九键数字键：进 T9 组合；「1」= 句读键（组合中上屏首选，空闲上屏「。」）
+            k.text != null && k.text!!.length == 1 && k.text!![0] in '1'..'9' &&
+                mode == MODE_LETTER && !engMode &&
+                SettingsStore.keyLayout(context) == SettingsStore.LAYOUT_9 -> {
+                val d = k.text!![0]
+                when {
+                    d == '1' && buf.isNotEmpty() -> {
+                        keyListener?.onText(
+                            if (candidates.isEmpty()) buf.toString() else candidates[0])
+                        resetComposition()
+                    }
+                    d == '1' -> keyListener?.onText("。")
+                    store.hasDictionary -> {
+                        buf.append(d)
+                        updateCandidates()
+                    }
+                    else -> keyListener?.onText(d.toString())   // 无词库：数字直通
+                }
+            }
+            // 双键：按键左右半区选字母（左半 = 前字母，右半 = 后字母）
+            k.chars != null && k.text == null -> {
+                val pair = k.chars!!
+                var ch = if (lastTapX < k.x) pair[0] else pair[1]
+                if (mode == MODE_LETTER && shift && !capsLock && ch.isLowerCase()) {
+                    ch = ch.uppercaseChar()
+                }
+                if (mode == MODE_LETTER && store.hasDictionary && !engMode) {
+                    buf.append(ch.toString())
+                    updateCandidates()
+                } else {
+                    keyListener?.onText(ch.toString())
+                    if (shift && !capsLock) shift = false
+                }
+                invalidate()
             }
             k.text != null -> {
                 val t0 = k.text!!

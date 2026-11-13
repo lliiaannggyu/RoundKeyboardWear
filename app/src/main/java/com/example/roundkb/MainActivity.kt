@@ -72,9 +72,12 @@ class MainActivity : ComponentActivity() {
         ActivityCompat.requestPermissions(
             this, arrayOf(Manifest.permission.RECORD_AUDIO), 1)
         stats.value = WordStore.get(this).info()
+        val ver = try {
+            packageManager.getPackageInfo(packageName, 0).versionName ?: ""
+        } catch (_: Exception) { "" }
         setContent {
             MaterialTheme {
-                RoundKbScreen(stats) { refreshStats() }
+                RoundKbScreen(stats, ver) { refreshStats() }
             }
         }
     }
@@ -90,13 +93,16 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun RoundKbScreen(stats: MutableState<String>, onRefresh: () -> Unit) {
+private fun RoundKbScreen(stats: MutableState<String>, ver: String, onRefresh: () -> Unit) {
     val context = LocalContext.current
     val activity = context as? ComponentActivity
 
     var keyScale by remember { mutableStateOf(SettingsStore.keyScale(context)) }
     var iconScale by remember { mutableStateOf(SettingsStore.iconScale(context)) }
     var hapticAmp by remember { mutableStateOf(SettingsStore.hapticAmp(context)) }
+    var layout by remember { mutableStateOf(SettingsStore.keyLayout(context)) }
+    var updMsg by remember { mutableStateOf("") }
+    var updBtn by remember { mutableStateOf(UpdateChecker.buttonLabel()) }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null && activity != null) {
@@ -114,7 +120,7 @@ private fun RoundKbScreen(stats: MutableState<String>, onRefresh: () -> Unit) {
             modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
         ) {
             Text(
-                text = "圆屏 26 键",
+                text = if (ver.isEmpty()) "圆屏 26 键" else "圆屏 26 键  v$ver",
                 color = MaterialTheme.colorScheme.onBackground,
                 fontSize = 18.sp,
                 fontWeight = FontWeight.Bold
@@ -168,6 +174,12 @@ private fun RoundKbScreen(stats: MutableState<String>, onRefresh: () -> Unit) {
                 onFinished = { SettingsStore.keyVibrate(context) }   // 松手试震
             )
 
+            // ---- 键盘布局：26 键 / 九键 / 双键（下次呼出键盘生效） ----
+            M3Button("键盘布局：${SettingsStore.LAYOUT_NAMES[layout]}", R.drawable.ic_settings) {
+                layout = (layout + 1) % 3
+                SettingsStore.setKeyLayout(context, layout)
+            }
+
             // ---- 模糊音开关（切换后词库索引后台重建） ----
             var fuzzyOn by remember { mutableStateOf(SettingsStore.fuzzy(context)) }
             M3Button(if (fuzzyOn) "模糊音：开" else "模糊音：关", R.drawable.ic_settings) {
@@ -190,8 +202,27 @@ private fun RoundKbScreen(stats: MutableState<String>, onRefresh: () -> Unit) {
                 onRefresh()
             }
 
+            // ---- 应用内更新：检查 → 下载 → 拉起系统安装器 ----
+            if (updMsg.isNotEmpty()) {
+                Text(
+                    text = updMsg,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 10.sp,
+                    lineHeight = 13.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
+            M3Button(updBtn, R.drawable.ic_upload) {
+                if (activity == null) return@M3Button
+                UpdateChecker.tap(activity) { msg ->
+                    updMsg = msg
+                    updBtn = UpdateChecker.buttonLabel()
+                }
+                updBtn = UpdateChecker.buttonLabel()
+            }
+
             Text(
-                text = "整句拼音：直接连打 · 候选行可翻页\n长按 ?123 = 英文直输 · 空格上屏首选并记忆\n滑过字母=整词输入 · 设置在下次呼出键盘时生效",
+                text = "整句拼音：直接连打 · 候选行可翻页\n九键：数字进 T9 组合，1 键上屏首选\n双键：点键的左右半区选字母\n空格上横向滑动 = 移动光标\n长按 ?123 = 英文直输 · 滑过字母=整词输入",
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 9.sp,
                 lineHeight = 12.sp,

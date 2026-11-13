@@ -17,6 +17,13 @@ object SettingsStore {
     private const val KEY_KEY_SCALE = "key_scale"
     private const val KEY_HAPTIC = "haptic_amp"
     private const val KEY_FUZZY = "fuzzy_pinyin"
+    private const val KEY_LAYOUT = "key_layout"
+
+    /** 键盘布局：26 键全键盘 / 九键 T9 / 双键（每键两字母） */
+    const val LAYOUT_26 = 0
+    const val LAYOUT_9 = 1
+    const val LAYOUT_DUAL = 2
+    val LAYOUT_NAMES = arrayOf("26 键", "九键", "双键")
 
     const val KEY_SCALE_MIN = 0.8f
     const val KEY_SCALE_MAX = 1.2f
@@ -66,6 +73,15 @@ object SettingsStore {
         hapticCache = value
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit().putFloat(KEY_HAPTIC, value).apply()
+    }
+
+    /** 键盘布局（0=26键 1=九键 2=双键），下次呼出键盘生效 */
+    fun keyLayout(ctx: Context): Int =
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getInt(KEY_LAYOUT, LAYOUT_26)
+
+    fun setKeyLayout(ctx: Context, value: Int) {
+        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putInt(KEY_LAYOUT, value).apply()
     }
 
     /** 模糊音（zh/z ch/c sh/s、an/ang en/eng in/ing ian/iang uan/uang），默认开 */

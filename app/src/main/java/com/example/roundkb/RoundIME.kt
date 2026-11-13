@@ -41,6 +41,20 @@ class RoundIME : InputMethodService(), RoundKeyboardView.KeyListener {
         currentInputConnection?.commitText(text, 1)
     }
 
+    /** 滑动空格移光标：起点光标位置（短文本视窗内即绝对位置） */
+    override fun cursorPos(): Int {
+        val ic = currentInputConnection ?: return 0
+        return ic.getTextBeforeCursor(4096, 0)?.length ?: 0
+    }
+
+    /** 滑动空格移光标：把光标移到绝对字符位置 */
+    override fun onCursorSet(pos: Int) {
+        val ic = currentInputConnection ?: return
+        val before = ic.getTextBeforeCursor(4096, 0)?.length ?: 0
+        val after = ic.getTextAfterCursor(4096, 0)?.length ?: 0
+        ic.setSelection(pos, pos.coerceIn(0, before + after))
+    }
+
     override fun onAction(action: Int) {
         val ic = currentInputConnection ?: return
         when (action) {
