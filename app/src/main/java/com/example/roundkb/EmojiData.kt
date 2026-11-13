@@ -7,8 +7,13 @@ package com.example.roundkb
  */
 object EmojiData {
 
-    /** 分类页签图标（与 [names] 一一对应） */
-    val tabIcons = listOf("🕘", "😀", "👍", "🐻", "🍔", "⚽", "🚗", "💡", "❤️", "🏁")
+    /** 分类页签图标（Material Design Icons 官方矢量，与 [names] 一一对应） */
+    val tabIcons = intArrayOf(
+        R.drawable.ic_tab_recent, R.drawable.ic_mood, R.drawable.ic_tab_gesture,
+        R.drawable.ic_tab_animal, R.drawable.ic_tab_food, R.drawable.ic_tab_activity,
+        R.drawable.ic_tab_travel, R.drawable.ic_tab_object, R.drawable.ic_tab_symbol,
+        R.drawable.ic_tab_flag
+    )
 
     /** 分类名 */
     val names = listOf("最近", "笑脸", "手势", "动物", "食物", "活动", "旅行", "物品", "符号", "旗帜")

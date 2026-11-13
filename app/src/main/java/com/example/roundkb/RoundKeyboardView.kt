@@ -170,6 +170,16 @@ class RoundKeyboardView @JvmOverloads constructor(
     private var emojiPage = 0               // 表情分类内页码
     private val recentEmoji = mutableListOf<String>()   // 最近使用的表情（内存）
     private var emojiSwiped = false         // 表情面板横滑翻页
+    // 分类页签条：加大尺寸 + 横向滑动 + 吸附对中
+    private var emojiTabScroll = 0f         // 页签条滑动偏移（px，正 = 页签右移）
+    private var emojiTabSpacing = 0f        // 页签间距（layoutKeys 时更新）
+    private var emojiTabMaxOff = 0f         // 滑动偏移上限（px）
+    private var emojiTabY = 0f              // 页签条中心 y（绝对坐标）
+    private var emojiTabHh = 0f             // 页签半高
+    private var tabTouch = false            // 手指落在页签条带内
+    private var tabDragging = false         // 正在拖动页签条
+    private var tabScrollAtDragStart = 0f
+    private var emojiTabSnapPending = true  // 下次布局时把当前分类页签吸附对中
     private var shift = false
     private var capsLock = false
     private var lastShiftTap = 0L
@@ -320,17 +330,32 @@ class RoundKeyboardView @JvmOverloads constructor(
         }
     }
 
-    /** 表情层：分类页签 + 5×4 网格（横滑翻页，页码圆点在 onDraw 画） */
+    /** 表情层：分类页签条（加大、可横向滑动、吸附对中、高亮当前分类）+ 5×4 网格（横滑翻页） */
     private fun addEmojiGrid(cx: Float, cy: Float, R: Float, s: Float) {
-        // 分类页签（页签之间留出明显间隙，避免挤成一条线）
-        val tabY = cy - 0.56f * R
+        // 分类页签条：Material 图标页签，横向滑动（视野外的页签不生成）
         val tabN = EmojiData.names.size
-        val tabSpacing = 0.105f * R
+        val tabSpacing = 0.158f * R
+        val tabY = cy - 0.575f * R
+        val tabHw = 0.072f * R
+        val tabHh = 0.072f * R
+        val chordTab = sqrt(max(0f, R * R - 0.575f * R * 0.575f * R))
+        val halfSpan = chordTab * 0.80f - tabHw     // 页签中心允许偏离中心的半宽
+        emojiTabMaxOff = max(0f, (tabN - 1) / 2f * tabSpacing - halfSpan)
+        emojiTabSpacing = tabSpacing
+        emojiTabY = tabY
+        emojiTabHh = tabHh
+        emojiTabScroll = emojiTabScroll.coerceIn(-emojiTabMaxOff, emojiTabMaxOff)
+        // 打开面板 / 切换分类后：把当前分类页签吸附对中（用户拖动时不干预）
+        if (emojiTabSnapPending && !tabDragging) {
+            emojiTabSnapPending = false
+            emojiTabScroll = (-(emojiCat - (tabN - 1) / 2f) * tabSpacing)
+                .coerceIn(-emojiTabMaxOff, emojiTabMaxOff)
+        }
         for (i in 0 until tabN) {
-            val x = cx + (i - (tabN - 1) / 2f) * tabSpacing
-            addKey(EmojiData.tabIcons[i], null, ACTION_EMOJI_TAB, x, tabY,
-                0.048f * R, 0.045f * R, true).apply {
-                emoji = true
+            val x = cx + (i - (tabN - 1) / 2f) * tabSpacing + emojiTabScroll
+            if (abs(x - cx) > halfSpan) continue     // 滑出视野的页签不参与命中
+            addKey("", null, ACTION_EMOJI_TAB, x, tabY, tabHw, tabHh, true).apply {
+                iconRes = EmojiData.tabIcons[i]
                 candIndex = i
                 if (i == emojiCat) noFill = false else noFill = true
             }
@@ -625,7 +650,7 @@ class RoundKeyboardView @JvmOverloads constructor(
                     canvas.drawRoundRect(rectF, k.hh * 0.5f, k.hh * 0.5f, keyPaint)
                 }
                 keyPaint.style = Paint.Style.STROKE
-                keyPaint.strokeWidth = max(2f, k.hh * 0.16f)
+                keyPaint.strokeWidth = max(1.5f, k.hh * 0.10f)
                 keyPaint.color = if (k === pressed) COLOR_TEXT else COLOR_PRESSED
                 canvas.drawRoundRect(rectF, k.hh * 0.5f, k.hh * 0.5f, keyPaint)
                 keyPaint.style = Paint.Style.FILL
@@ -645,8 +670,14 @@ class RoundKeyboardView @JvmOverloads constructor(
                 val dr = context.getDrawable(k.iconRes)
                 if (dr != null) {
                     dr.setTint(txt)
-                    // 图标边长 = 键短边 × 基准 0.95 × 全局缩放（设置页可调 小/标准/大）
-                    val s = min(k.hw, k.hh) * 0.95f * SettingsStore.iconScale(context)
+                    // 图标边长：描边键帽内 0.70×键高（避免撑满发灰）；普通键 0.95×短边；
+                    // 均按设置页图标大小缩放，且不越出按键
+                    val iconScale = SettingsStore.iconScale(context)
+                    val s = if (k.chip) {
+                        min(k.hh * 0.70f * iconScale, k.hw * 0.85f)
+                    } else {
+                        min(min(k.hw, k.hh) * 0.95f * iconScale, min(k.hw, k.hh) * 0.92f)
+                    }
                     dr.setBounds(
                         (k.x - s).toInt(), (k.y - s).toInt(),
                         (k.x + s).toInt(), (k.y + s).toInt()
@@ -689,12 +720,17 @@ class RoundKeyboardView @JvmOverloads constructor(
             canvas.drawText(label, k.x, ty, textPaint)
         }
 
-        // 表情层附加绘制：最近分类为空时的提示 + 页码圆点
+        // 表情层附加绘制：当前分类名（页签条下方）+ 最近分类为空时的提示 + 页码圆点
         if (mode == MODE_EMOJI) {
             val size = min(width, height).toFloat()
             val cx = width / 2f
             val cy = height / 2f
             val R = safeRadius(size)
+            textPaint.textSize = 0.038f * R
+            textPaint.color = 0xFF9AA0A6.toInt()
+            val fm = textPaint.fontMetrics
+            canvas.drawText(EmojiData.names[emojiCat], cx,
+                cy - 0.472f * R - (fm.ascent + fm.descent) / 2f, textPaint)
             if (currentEmojiList().isEmpty()) {
                 textPaint.textSize = 0.075f * R
                 textPaint.color = 0xFF9AA0A6.toInt()
@@ -752,6 +788,11 @@ class RoundKeyboardView @JvmOverloads constructor(
                 trace.add(floatArrayOf(x, y))
                 tracing = false
                 emojiSwiped = false
+                // 手指是否落在分类页签条带内（表情层：拖动页签条，而非翻页）
+                tabTouch = mode == MODE_EMOJI && emojiTabSpacing > 0f &&
+                    abs(y - emojiTabY) < emojiTabHh * 2.6f
+                tabDragging = false
+                tabScrollAtDragStart = emojiTabScroll
                 decoder?.clear()
                 updatePressed(x, y)
                 if (pressed?.action == ACTION_DELETE) postDelayed(deleteRepeat, 400)
@@ -778,10 +819,22 @@ class RoundKeyboardView @JvmOverloads constructor(
                         removeCallbacks(spaceLongPress)
                     }
                     if (mode == MODE_EMOJI) {
-                        // 表情面板：横滑翻页（不参与滑行打字）
+                        // 表情面板：页签条带内拖动 = 滑动分类条；其余区域横滑 = 翻页
                         val dx = x - start[0]
                         val dy = y - start[1]
-                        if (!emojiSwiped && hypot(dx, dy) > 0.18f * safeRadius(size) &&
+                        if (tabTouch) {
+                            if (!tabDragging && abs(dx) > 0.02f * safeRadius(size)) {
+                                tabDragging = true
+                                pressed = null
+                            }
+                            if (tabDragging) {
+                                emojiTabScroll = (tabScrollAtDragStart + dx)
+                                    .coerceIn(-emojiTabMaxOff, emojiTabMaxOff)
+                                layoutKeys(width.toFloat(), height.toFloat())
+                            } else {
+                                updatePressed(x, y)
+                            }
+                        } else if (!emojiSwiped && hypot(dx, dy) > 0.18f * safeRadius(size) &&
                             abs(dx) > abs(dy)
                         ) {
                             emojiSwiped = true
@@ -811,7 +864,16 @@ class RoundKeyboardView @JvmOverloads constructor(
                 removeCallbacks(spaceLongPress)
                 val longFired = engLongFired
                 engLongFired = false
-                if (emojiSwiped) {
+                if (tabDragging) {
+                    // 页签条滑动结束：吸附到最近页签中心
+                    tabDragging = false
+                    if (emojiTabSpacing > 0f) {
+                        val snapped = (emojiTabScroll / emojiTabSpacing).toInt() * emojiTabSpacing
+                        emojiTabScroll = snapped.coerceIn(-emojiTabMaxOff, emojiTabMaxOff)
+                        layoutKeys(width.toFloat(), height.toFloat())
+                        invalidate()
+                    }
+                } else if (emojiSwiped) {
                     // 横滑翻页已完成，不触发点按
                 } else if (tracing) {
                     finishGesture()
@@ -829,6 +891,8 @@ class RoundKeyboardView @JvmOverloads constructor(
                 removeCallbacks(deleteRepeat)
                 removeCallbacks(engLongPress)
                 removeCallbacks(spaceLongPress)
+                tabTouch = false
+                tabDragging = false
                 engLongFired = false
                 pressed = null
                 tracing = false
@@ -856,7 +920,7 @@ class RoundKeyboardView @JvmOverloads constructor(
 
     private fun fireKey(k: Key) {
         // 候选词上屏（emoji 键也用 candIndex，单独判断）
-        if (k.candIndex >= 0 && !k.emoji) {
+        if (k.candIndex >= 0 && !k.emoji && k.action != ACTION_EMOJI_TAB) {
             val global = candPage * CAND_PER_PAGE + k.candIndex
             val text = candidates.getOrNull(global) ?: k.text ?: return
             keyListener?.onText(text)
@@ -917,6 +981,9 @@ class RoundKeyboardView @JvmOverloads constructor(
                     emojiCat = 1   // 从未用过表情：默认进「笑脸」分类
                     emojiPage = 0
                 }
+                if (mode == MODE_EMOJI) {
+                    emojiTabSnapPending = true   // 打开面板：吸附当前分类页签
+                }
                 relayout()
             }
             k.action == ACTION_SYMPAGE -> {
@@ -930,6 +997,7 @@ class RoundKeyboardView @JvmOverloads constructor(
             k.action == ACTION_EMOJI_TAB -> {
                 emojiCat = k.candIndex
                 emojiPage = 0
+                emojiTabSnapPending = true   // 布局时把选中页签吸附到条带中心
                 relayout()
             }
             k.emoji && k.action < 0 -> {
