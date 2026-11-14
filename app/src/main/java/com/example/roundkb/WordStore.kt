@@ -78,9 +78,14 @@ class WordStore private constructor(context: Context) {
     val entryCount: Int get() = sorted.size
 
     fun info(): String {
-        if (sorted.isEmpty()) return "当前词库：未导入（可导入单词表或 拼音→词 文本）"
-        val time = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(importTime))
-        return "当前词库：${sorted.size} 条 · 来源 ${sourceName.ifEmpty { "自定义" }} · 导入于 $time"
+        if (sorted.isEmpty()) return "当前词库：未导入（可导入 拼音→词 文本）"
+        val custom = if (dictFile.exists()) {
+            val time = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(importTime))
+            "自定义词库 ${sorted.size} 条 · 导入于 $time"
+        } else {
+            "词库 ${sorted.size} 条"
+        }
+        return "当前$custom"
     }
 
     /** 应用内更新词库：导入即生效（同进程），无需重装应用。
@@ -124,18 +129,29 @@ class WordStore private constructor(context: Context) {
     private fun load() {
         cachedMtime = if (dictFile.exists()) dictFile.lastModified() else -1L
         val list = mutableListOf<Entry>()
-        try {
-            BufferedReader(InputStreamReader(dictFile.inputStream(), Charsets.UTF_8)).use { br ->
-                var line = br.readLine()
-                while (line != null && list.size < MAX_ENTRIES) {
-                    parseLine(line.trim())?.let { list.add(it) }
-                    line = br.readLine()
+        // 内置预编译二进制词库（assets/builtin_dict.bin，构建期由雾凇词库生成，
+        // 按 normKey 预排序）：随包携带、毫秒级加载，保证装上即能打中文，零等待零部署
+        var builtinOnly = loadBuiltin(list)
+        // 合并用户导入词库（同 key+value 覆盖内置频次）
+        if (dictFile.exists()) {
+            builtinOnly = false
+            try {
+                BufferedReader(InputStreamReader(dictFile.inputStream(), Charsets.UTF_8)).use { br ->
+                    var line = br.readLine()
+                    while (line != null && list.size < MAX_ENTRIES) {
+                        parseLine(line.trim())?.let { e ->
+                            list.removeAll { it.normKey == e.normKey && it.value == e.value }
+                            list.add(e)
+                        }
+                        line = br.readLine()
+                    }
                 }
+            } catch (_: Exception) {
             }
-        } catch (_: Exception) {
         }
         // 合并用户词典（自学习的高频词覆盖主库频次）
         if (userFile.exists()) {
+            builtinOnly = false
             try {
                 BufferedReader(InputStreamReader(userFile.inputStream(), Charsets.UTF_8)).use { br ->
                     var line = br.readLine()
@@ -150,11 +166,40 @@ class WordStore private constructor(context: Context) {
             } catch (_: Exception) {
             }
         }
-        sorted = list.sortedBy { it.normKey }
+        // 纯内置词库且未开模糊音：文件本身已按 normKey 排好序，直接用（零排序零计算）
+        val fuzzy = SettingsStore.fuzzy(appContext)
+        sorted = if (builtinOnly && !fuzzy) list else list.sortedBy { it.normKey }
         keyIndex = null   // 词库变了，整句索引重建
         endpointIndex = null   // 词库变了，端点索引重建
         // 后台预构建整句索引，避免首次按键卡顿
         Thread { try { ensureKeyIndex() } catch (_: Exception) {} }.start()
+    }
+
+    /**
+     * 读取内置二进制词库（格式见构建脚本 gen_builtin.py）：
+     * int32 条数 + 每条 int32 keyLen+key + int32 valLen+value + int32 freq，
+     * big-endian，key 已归一且升序。返回 true = 本次加载只含内置词库。
+     */
+    private fun loadBuiltin(list: MutableList<Entry>): Boolean {
+        return try {
+            val data = appContext.assets.open("builtin_dict.bin").use { it.readBytes() }
+            val bb = java.nio.ByteBuffer.wrap(data)   // BIG_ENDIAN 为默认字节序
+            val n = bb.int
+            val fuzzy = SettingsStore.fuzzy(appContext)
+            for (i in 0 until n) {
+                val kl = bb.int
+                val kb = ByteArray(kl); bb.get(kb)
+                val vl = bb.int
+                val vb = ByteArray(vl); bb.get(vb)
+                val freq = bb.int
+                val key = String(kb, Charsets.US_ASCII)
+                val value = String(vb, Charsets.UTF_8)
+                list.add(Entry(key, if (fuzzy) normFuzzy(key) else key, value, freq))
+            }
+            true
+        } catch (_: Exception) {
+            false   // 读不到内置词库（理论上不会）：仍可走用户导入词库
+        }
     }
 
     // ==================== 用户词典自学习 ====================
@@ -187,14 +232,17 @@ class WordStore private constructor(context: Context) {
         }.start()
     }
 
-    /** 拼音归一化：小写、剥声调符号（nǐ→ni）与音节尾声调数字（ni3→ni），只留字母 */
+    /** 拼音归一化：小写、剥声调符号（nǐ→ni）、ü→v（用户输入习惯 lü→lv）、只留字母 */
     private fun normPinyin(s: String): String {
         val nfd = Normalizer.normalize(s, Normalizer.Form.NFD)
         val sb = StringBuilder(nfd.length)
         for (ch in nfd) {
             val c = Character.toLowerCase(ch)
-            if (c in 'a'..'z') sb.append(c)
-            // 其余（声调 combining mark、数字、空格）一律丢弃
+            when {
+                c == 'ü' -> sb.append('v')
+                c in 'a'..'z' -> sb.append(c)
+                // 其余（声调 combining mark、数字、空格）一律丢弃
+            }
         }
         return sb.toString()
     }
@@ -379,15 +427,25 @@ class WordStore private constructor(context: Context) {
     private val DIGIT_LETTERS = arrayOf(
         "", "", "ABC", "DEF", "GHI", "JKL", "MNO", "PQRS", "TUV", "WXYZ")
 
-    /** 拼音字母 → 所属数字键 */
-    private val digitOf: Map<Char, Char> = buildMap {
-        for (d in '2'..'9') for (c in DIGIT_LETTERS[d - '0']) put(c, d)
+    /** 拼音字母 → 所属数字键。普通 HashMap 构建（buildMap 在部分运行时上行为异常），
+     *  初始化即校验：映射不全立即写日志（26 字母必须全部命中）。 */
+    private val digitOf: Map<Char, Char> = run {
+        val m = HashMap<Char, Char>(32)
+        for (d in '2'..'9') for (c in DIGIT_LETTERS[d - '0']) m[c] = d
+        android.util.Log.w("RoundKB", "digitOf 构建 size=${m.size}")
+        if (m.size != 26) android.util.Log.w("RoundKB", "digitOf 异常: keys=${m.keys}")
+        m
     }
 
-    /** 按首个字母所在数字分组的音节表（长度降序，整句切分用） */
-    private val syllablesByDigit: Map<Char, List<String>> =
-        PinyinSyllables.ALL.groupBy { digitOf[it[0]]!! }
+    /** 按首个字母所在数字分组的音节表（长度降序，整句切分用）。
+     *  防御式构建：任何映射不到的音节兜底为 '?'（不参与九键切分但绝不崩溃）。 */
+    private val syllablesByDigit: Map<Char, List<String>> = run {
+        val bad = PinyinSyllables.ALL.filter { digitOf[it.firstOrNull()] == null }
+        if (bad.isNotEmpty())
+            android.util.Log.w("RoundKB", "T9 音节表异常条目 ${bad.size}: ${bad.take(12)}")
+        PinyinSyllables.ALL.groupBy { digitOf[it[0]] ?: '?' }
             .mapValues { (_, v) -> v.sortedByDescending { it.length } }
+    }
 
     private val syllableSet = HashSet<String>(PinyinSyllables.ALL.size * 2)
     private val syllablePrefixSet = HashSet<String>(PinyinSyllables.ALL.size * 6)

@@ -240,10 +240,10 @@ class RoundKeyboardView @JvmOverloads constructor(
         }
     }
 
-    /** 26 键 / 双键中文模式且 librime 已就绪 → 走 rime 组合（九键 T9 仍用内置引擎） */
+    /** 26 键 / 双键中文模式且 librime 自检通过 → 走 rime 组合（否则内置词库引擎，九键始终内置） */
     private fun rimeMode(): Boolean =
         mode == MODE_LETTER && !engMode &&
-            SettingsStore.keyLayout(context) != SettingsStore.LAYOUT_9 && RimeEngine.ready
+            SettingsStore.keyLayout(context) != SettingsStore.LAYOUT_9 && RimeEngine.verified
 
     /** 清掉本地的 rime 组合状态（不提交） */
     private fun clearRimeLocal() {

@@ -71,13 +71,19 @@ class MainActivity : ComponentActivity() {
         // 麦克风权限：键盘工具条 🎤 语音输入用（只在首次启动时弹一次授权）
         ActivityCompat.requestPermissions(
             this, arrayOf(Manifest.permission.RECORD_AUDIO), 1)
-        stats.value = WordStore.get(this).info()
-        // 提前启动 librime（设置页打开时后台部署，下次呼出键盘即就绪）
-        RimeEngine.ensureStarted(this)
+        CrashLogger.install(this)
+        CrashLogger.markHealthy()
+        // 内置词库加载与 librime 预热全部后台进行——应用界面立即呈现，零加载感
+        Thread {
+            RimeEngine.ensureStarted(this)
+            WordStore.get(this)
+            runOnUiThread { refreshStats() }
+        }.start()
         RimeEngine.addReadyListener { refreshStats() }
         val ver = try {
             packageManager.getPackageInfo(packageName, 0).versionName ?: ""
         } catch (_: Exception) { "" }
+        CrashLogger.setVersion(ver)
         setContent {
             MaterialTheme {
                 RoundKbScreen(stats, ver) { refreshStats() }
@@ -91,12 +97,15 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun refreshStats() {
+        // 内置词库引擎装上即用；Rime 通过自检后作为增强引擎接管 26/双键
         val eng = when {
-            RimeEngine.ready -> "Rime 拼音引擎：就绪"
-            RimeEngine.deploying -> "Rime 拼音引擎：词库部署中…"
+            RimeEngine.verified -> "Rime 拼音引擎：就绪"
+            RimeEngine.disableReason != null -> RimeEngine.disableReason ?: ""
+            RimeEngine.deploying -> "Rime 拼音引擎：准备中…"
             else -> "Rime 拼音引擎：启动中…"
         }
-        stats.value = "$eng\n" + WordStore.get(this).info()
+        val crash = CrashLogger.lastSummary()?.let { "\n上次异常：$it" } ?: ""
+        stats.value = "$eng\n" + WordStore.get(this).info() + crash
     }
 }
 
@@ -201,6 +210,36 @@ private fun RoundKbScreen(stats: MutableState<String>, ver: String, onRefresh: (
             M3Button("去开启输入法", R.drawable.ic_settings) {
                 activity?.startActivity(Intent(Settings.ACTION_INPUT_METHOD_SETTINGS))
             }
+
+            // ---- 崩溃日志：闪退后这里能看到堆栈，截图发开发者即可定位 ----
+            var showCrash by remember { mutableStateOf(false) }
+            M3Button("崩溃日志", R.drawable.ic_settings) { showCrash = true }
+            if (showCrash) {
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { showCrash = false },
+                    confirmButton = {
+                        M3Button("关闭", R.drawable.ic_settings) { showCrash = false }
+                    },
+                    dismissButton = {
+                        M3Button("清除记录", R.drawable.ic_delete) {
+                            CrashLogger.clear()
+                            activity?.let { RimeEngine.resetSafety(it) }
+                            onRefresh()
+                            showCrash = false
+                        }
+                    },
+                    title = { Text("崩溃日志", fontSize = 14.sp) },
+                    text = {
+                        Text(
+                            text = CrashLogger.logText(),
+                            fontSize = 9.sp,
+                            lineHeight = 12.sp,
+                            modifier = Modifier.verticalScroll(rememberScrollState())
+                        )
+                    }
+                )
+            }
+
             M3Button("导入词库", R.drawable.ic_upload) {
                 picker.launch(arrayOf(
                     "text/plain", "text/tab-separated-values", "text/csv", "application/octet-stream"))
